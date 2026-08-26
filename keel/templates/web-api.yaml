@@ -1,0 +1,58 @@
+name: web-api
+description: Template for HTTP APIs and web services.
+slots:
+  - name: endpoints
+    section: io_contract
+    required: true
+    label: Endpoints
+    question_hint: "What routes/methods should exist, and what does each accept and return?"
+    default_strategy: "A minimal set of endpoints directly implied by the prompt (e.g. one POST to submit input, one GET to retrieve a result), returning JSON."
+    priority: 1
+
+  - name: io_contract
+    section: io_contract
+    required: true
+    label: Request / response contract
+    question_hint: "What does a request body look like, and what does a successful response look like?"
+    default_strategy: "A JSON request body with the fields the prompt implies, and a JSON response echoing a status plus the result payload."
+    priority: 2
+
+  - name: non_goals
+    section: non_goals
+    required: true
+    label: Non-goals
+    question_hint: "What should the agent explicitly NOT build — authentication, a database, rate limiting, a frontend?"
+    default_strategy: "Skip authentication, a persistent database, rate limiting, and any frontend — build only the endpoints described, backed by in-memory or file-based storage."
+    priority: 3
+
+  - name: constraints
+    section: constraints
+    required: true
+    label: Hard constraints
+    question_hint: "Any hard limits — auth requirements, no paid APIs, a specific framework/language, existing dependencies?"
+    default_strategy: "Assume no auth, no paid APIs, and reuse whatever framework/ecosystem is already in this repo (or a minimal Python/FastAPI service if none detected)."
+    priority: 4
+
+  - name: runtime
+    section: constraints
+    required: true
+    label: Runtime
+    question_hint: "How is this served — locally for development, or deployed somewhere specific?"
+    default_strategy: "Assume it runs locally via the framework's built-in dev server; no deployment target unless the prompt names one."
+    priority: 5
+
+  - name: scale
+    section: constraints
+    required: true
+    label: Scale
+    question_hint: "Expected request volume and concurrency — a handful of requests a day, or real production traffic?"
+    default_strategy: "Assume low traffic (single-digit requests per minute, one instance, no need for horizontal scaling)."
+    priority: 6
+
+  - name: done
+    section: acceptance
+    required: true
+    label: Definition of done
+    question_hint: "How will you know the API works — a manual request, a smoke test, specific responses to check?"
+    default_strategy: "Starting the server and hitting each endpoint with a sample request returns the documented response shape with a 2xx status."
+    priority: 7

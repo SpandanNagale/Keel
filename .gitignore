@@ -1,0 +1,13 @@
+__pycache__/
+*.pyc
+.pytest_cache/
+*.egg-info/
+build/
+dist/
+.venv/
+venv/
+
+# Keel's own output directory shares its name with the source package when
+# `keel` is run from inside this repo -- ignore generated artifacts, keep source.
+keel/*.md
+keel/*.json

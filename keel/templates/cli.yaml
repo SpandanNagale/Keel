@@ -1,0 +1,58 @@
+name: cli
+description: Template for command-line tools and scripts.
+slots:
+  - name: io_contract
+    section: io_contract
+    required: true
+    label: Input / Output
+    question_hint: "What input does the command take (files, stdin, arguments) and what does it print or write?"
+    default_strategy: "Take input as one or more file paths (or stdin if piped), and write output to stdout by default with an optional --output flag to write to a file."
+    priority: 1
+
+  - name: non_goals
+    section: non_goals
+    required: true
+    label: Non-goals
+    question_hint: "What should the agent explicitly NOT build — a GUI, a server mode, config files, a plugin system?"
+    default_strategy: "Skip a GUI, a server/daemon mode, a plugin system, and packaging for distribution — build only the single command described."
+    priority: 2
+
+  - name: argument_surface
+    section: io_contract
+    required: true
+    label: Argument surface
+    question_hint: "What flags, arguments, and subcommands should the CLI expose?"
+    default_strategy: "A single positional argument for the main input, plus --output/-o and --help — no subcommands unless the prompt implies distinct operations."
+    priority: 3
+
+  - name: constraints
+    section: constraints
+    required: true
+    label: Hard constraints
+    question_hint: "Any hard limits — offline only, no paid APIs, a specific language, existing dependencies to reuse or avoid?"
+    default_strategy: "Assume no paid APIs, no network calls beyond what's essential, and reuse whatever language/ecosystem is already in this repo (or Python if none detected)."
+    priority: 4
+
+  - name: done
+    section: acceptance
+    required: true
+    label: Definition of done
+    question_hint: "How will you know the command works — what's the observable signal?"
+    default_strategy: "Running the command against a sample input from the terminal produces the documented output with exit code 0, and a bad input produces a clear error with a non-zero exit code."
+    priority: 5
+
+  - name: error_behavior
+    section: constraints
+    required: true
+    label: Error behaviour
+    question_hint: "How should the tool behave on bad input or failure — exit codes, error messages, partial output?"
+    default_strategy: "Print a clear one-line error to stderr and exit with a non-zero status code; never write partial or corrupt output files."
+    priority: 6
+
+  - name: scale
+    section: constraints
+    required: false
+    label: Scale
+    question_hint: "Roughly how much data will a single run process?"
+    default_strategy: "Assume a single local run over a small-to-moderate input (up to a few thousand lines or files)."
+    priority: 7

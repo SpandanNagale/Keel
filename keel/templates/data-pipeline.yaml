@@ -1,0 +1,58 @@
+name: data-pipeline
+description: Template for ETL, scraping, batch, and data-processing pipelines.
+slots:
+  - name: io_contract
+    section: io_contract
+    required: true
+    label: Input / Output
+    question_hint: "What's the data source and the destination format — files, a database, an API, a message queue?"
+    default_strategy: "Read from local files or a documented API/source in the prompt, and write results to a single structured local file (JSON or CSV)."
+    priority: 1
+
+  - name: scale
+    section: constraints
+    required: true
+    label: Scale
+    question_hint: "How much data, how often — one-time backfill, hourly batch, streaming, and roughly how many records?"
+    default_strategy: "Assume a one-time or on-demand batch run over a small-to-moderate dataset (hundreds to low tens of thousands of records), not a continuous stream."
+    priority: 2
+
+  - name: schema
+    section: io_contract
+    required: true
+    label: Data schema
+    question_hint: "What does one input record look like, and what fields must the output contain?"
+    default_strategy: "Infer the minimal record shape implied by the prompt (one record per source item, with the fields explicitly named in the prompt); leave undocumented fields out rather than guessing extras."
+    priority: 3
+
+  - name: non_goals
+    section: non_goals
+    required: true
+    label: Non-goals
+    question_hint: "What should the agent explicitly NOT build — a scheduler, retries/backoff, a database, monitoring/alerting?"
+    default_strategy: "Skip building a scheduler, a database, monitoring/alerting, and elaborate retry logic — a single reliable pass over the data is enough."
+    priority: 4
+
+  - name: constraints
+    section: constraints
+    required: true
+    label: Hard constraints
+    question_hint: "Any hard limits — offline only, no paid APIs, rate limits to respect, a specific language, existing dependencies?"
+    default_strategy: "Assume no paid APIs, respect any obvious rate limits on the data source, and reuse whatever language/ecosystem is already in this repo (or Python if none detected)."
+    priority: 5
+
+  - name: runtime
+    section: constraints
+    required: true
+    label: Runtime
+    question_hint: "Where does this pipeline run — a manual script, a cron job, an orchestrator (Airflow/Dagster/Prefect)?"
+    default_strategy: "Assume a manually invoked local script — no scheduler or orchestrator — unless the repo already has one installed."
+    priority: 6
+
+  - name: done
+    section: acceptance
+    required: true
+    label: Definition of done
+    question_hint: "How will you know the pipeline ran correctly — record counts, spot checks, a validation step?"
+    default_strategy: "Running the pipeline once produces the output file with a record count that roughly matches the input, and a handful of spot-checked records look correct."
+    priority: 7

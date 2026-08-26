@@ -1,0 +1,50 @@
+name: default
+description: General-purpose template for tools, scripts, and utilities with no clearer project-type signal.
+slots:
+  - name: io_contract
+    section: io_contract
+    required: true
+    label: Input / Output
+    question_hint: "What goes in, what comes out, and in what format?"
+    default_strategy: "Infer the most literal input/output pair implied by the prompt (e.g. read local files, write a structured file back), preferring plain formats (JSON, CSV, plain text) over anything requiring new infrastructure."
+    priority: 1
+
+  - name: non_goals
+    section: non_goals
+    required: true
+    label: Non-goals
+    question_hint: "What should the agent explicitly NOT build — auth, a database, a UI, test scaffolding, config management?"
+    default_strategy: "Skip authentication, a database, a UI, packaging/distribution, and comprehensive test suites — build only the working core described in the prompt."
+    priority: 2
+
+  - name: constraints
+    section: constraints
+    required: true
+    label: Hard constraints
+    question_hint: "Any hard limits — offline only, no paid APIs, a specific language, existing dependencies to reuse or avoid?"
+    default_strategy: "Assume no paid APIs, no network calls beyond what's essential, and reuse whatever language/ecosystem is already in this repo (or Python if none detected)."
+    priority: 3
+
+  - name: runtime
+    section: constraints
+    required: true
+    label: Runtime
+    question_hint: "Where does this run — a one-off CLI command, a cron job, a long-running server, a notebook, or interactively on your machine?"
+    default_strategy: "Assume a one-off local CLI script invoked manually, since no scheduling or serving need was mentioned."
+    priority: 4
+
+  - name: scale
+    section: constraints
+    required: true
+    label: Scale
+    question_hint: "What volume, frequency, or size of data should this handle?"
+    default_strategy: "Assume a single-user, one-off or occasional run over a small local dataset (tens to low thousands of items) unless the prompt implies otherwise."
+    priority: 5
+
+  - name: done
+    section: acceptance
+    required: true
+    label: Definition of done
+    question_hint: "How will you know this works — what's the observable signal?"
+    default_strategy: "Running the tool once against real or sample input produces the expected output artifact without errors, and the output is manually spot-checked for correctness."
+    priority: 6
