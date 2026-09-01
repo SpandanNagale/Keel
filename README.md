@@ -67,14 +67,23 @@ A **slot** is a named dimension a prompt must pin down. Keel asks a question bec
 slot is empty and stops when every required slot is addressed — termination is a loop
 over the slot list, never "the model decides it has asked enough."
 
-| Slot | Captures |
-|---|---|
-| `io_contract` | What goes in, what comes out, in what format |
-| `scale` | Volume, frequency, data size |
-| `runtime` | Where it runs — CLI, cron, server, notebook, browser |
-| `constraints` | Hard limits: offline, no paid APIs, language, existing deps |
-| `done` | Observable definition of done |
-| `non_goals` | What the agent must NOT build |
+| Slot | Captures | Tier |
+|---|---|---|
+| `io_contract` | What goes in, what comes out, in what format | core |
+| `scale` | Volume, frequency, data size | core |
+| `runtime` | Where it runs — CLI, cron, server, notebook, browser | core |
+| `constraints` | Hard limits: offline, no paid APIs, language, existing deps | core |
+| `done` | Observable definition of done | core |
+| `non_goals` | What the agent must NOT build | core |
+| `data_model` | The core entities and the fields each record carries | optional |
+| `interfaces` | The concrete surface: endpoints, commands, screens, functions | optional |
+| `error_handling` | What happens on bad input, failure, or partial success | optional |
+
+The six core slots are always asked. The three optional slots are governed by a
+**Depth** selector on the start screen: `Quick` asks the six core, `Standard`
+(default) adds `data_model` and `interfaces`, `Thorough` adds `error_handling`.
+No session asks more than **8** questions; any slot not asked is filled from the
+answers already given (one LLM call), never left blank.
 
 Slots live in YAML under [`keel/templates/`](keel/templates/) — `default`, `cli`,
 `data-pipeline`, `web-api`, `web-app`. Templates differ in question phrasing, priority,
@@ -112,27 +121,37 @@ builds one. Groq and Ollama enforce JSON natively; Anthropic via an assistant-tu
 — a prose reply becomes a distinguishable parse error. On failure the UI surfaces the
 reason, falls back to template text, and sets a `degraded` flag the output notes.
 
-Call sites, all routed through `engine.capped_complete_json` (per-session cap of 10):
+Call sites, all routed through `engine.capped_complete_json` (per-session cap of 14):
 
 1. **Extract** pre-answered slots from the opening idea.
-2. **Question** — generate one question + recommended default per unfilled slot.
-3. **Synthesis** — once, after every slot is filled: one call that reads the idea plus
-   every answer and writes the whole document. It resolves contradictions between answers,
-   moves facts to the right section, and expands each section to the length its content
-   warrants. Section headings and their order are owned by `render.py`, never the model:
-   the model returns section *bodies* keyed by name.
+2. **Question** — generate one question + recommended default per unfilled slot (at most 8).
+3. **Context defaults** — one call that fills any slot the depth or the 8-question cap left
+   unasked, from the answers already given.
+4. **Conflict check** (`render.check_conflicts`) — its own call, *before* synthesis, looking
+   for contradictions between answers and for a capability in the original idea that no
+   answer covers (premise drift). Its result is written into *Open questions* mechanically
+   in Python; the synthesis model never decides whether a conflict is reported.
+5. **Synthesis** — once, after every slot is filled: one call that reads the idea plus
+   every answer and writes the whole document. It keeps each section consistent with the
+   most specific answer, moves facts to the right section, enumerates the full interface
+   surface, and expands each section to the length its content warrants. Section headings
+   and their order are owned by `render.py`, never the model: the model returns section
+   *bodies* keyed by name.
 
-The synthesized document is then run through deterministic Python checks (no second LLM
+The synthesized document is then run through deterministic Python checks (no extra LLM
 call): structure and ordering, empty sections, hardcoded-secret scrub (with a note added
-to *Open questions*), and a `default_strategy`-leak assertion. Any failure falls back to
-the deterministic one-value-per-line renderer, with a visible warning and the degraded
+to *Open questions*), a `default_strategy`-leak assertion, plus flags for fabricated
+numeric thresholds, acceptance criteria that merely restate a constraint or non-goal, and
+a missing disclaimer in a health/legal/financial spec. Any structural failure falls back
+to the deterministic one-value-per-line renderer, with a visible warning and the degraded
 note. That renderer stays fully functional with no LLM available.
 
 ### Caps (all constants)
 
 | Cap | Value | Where |
 |---|---|---|
-| LLM calls per session | 10 | `keel/engine.py` |
+| LLM calls per session | 14 | `keel/engine.py` |
+| Questions asked per session | 8 | `keel/engine.py` |
 | Output tokens — question | 800 | `keel/llm.py` |
 | Output tokens — synthesis | 2000 | `keel/render.py` |
 | Shared-key calls per day | 500 | `app.py` |

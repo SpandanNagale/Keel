@@ -26,8 +26,19 @@ from keel import llm
 from keel.models import SessionState, SlotDef, SlotValue, Template
 
 # Hard cap: a single session may make at most this many LLM calls. The next one
-# is refused with an error rather than made.
-MAX_LLM_CALLS_PER_SESSION = 10
+# is refused with an error rather than made. Raised from 10 for Phase 2: a
+# "thorough" session can now spend extract(1) + asked(8) + context-defaults(1) +
+# check_conflicts(1) + synthesis(1) = 12, and the ceiling keeps headroom.
+MAX_LLM_CALLS_PER_SESSION = 14
+
+# Never ask more than this many questions in one session, regardless of how many
+# slots the template (and depth) put in play. Slots past this are defaulted from
+# accumulated context rather than asked.
+MAX_ASKED_QUESTIONS = 8
+
+# Depth -> how many of the optional (required=false) slots to ASK about, in
+# priority order. The rest are still filled, just not asked.
+DEPTH_OPTIONAL = {"quick": 0, "standard": 2, "thorough": 3}
 
 # Opening ideas longer than this are rejected before any call is made.
 MAX_PROMPT_CHARS = 500
@@ -130,23 +141,42 @@ def slugify(text: str, *, max_len: int = 40) -> str:
 # --------------------------------------------------------------------------- #
 # Session lifecycle
 # --------------------------------------------------------------------------- #
-def start_session(prompt: str, template_name: str, *, created_date: str) -> SessionState:
+def start_session(
+    prompt: str, template_name: str, *, created_date: str, depth: str = "standard"
+) -> SessionState:
     """Build an empty session. Makes no LLM call."""
     return SessionState(
         original_prompt=prompt.strip(),
         template_name=template_name,
         created_date=created_date,
+        depth=depth if depth in DEPTH_OPTIONAL else "standard",
     )
+
+
+def askable_slots(session: SessionState, template: Template) -> list[SlotDef]:
+    """The slots this session's depth puts in play to ASK about: the required
+    six, plus the first N optional slots by priority (N from the depth)."""
+    n_optional = DEPTH_OPTIONAL.get(session.depth, DEPTH_OPTIONAL["standard"])
+    optional = sorted(
+        (s for s in template.slots if not s.required),
+        key=lambda s: (s.priority, s.name),
+    )
+    chosen = list(template.required_slots()) + optional[:n_optional]
+    return sorted(chosen, key=lambda s: (s.priority, s.name))
 
 
 def freeze_pending(session: SessionState, template: Template) -> None:
     """Fix the ordered list of slots still to ask about. Call once, after
-    extraction, so the ``Question X of N`` counter never shifts."""
-    session.pending_slots = [
+    extraction, so the ``Question X of N`` counter never shifts. Depth chooses how
+    many optional slots are included; the list is then capped at
+    :data:`MAX_ASKED_QUESTIONS`. Slots left out are filled by
+    :func:`fill_unasked_slots`, not omitted."""
+    pending = [
         s.name
-        for s in template.required_slots()
+        for s in askable_slots(session, template)
         if session.slots.get(s.name) is None
     ]
+    session.pending_slots = pending[:MAX_ASKED_QUESTIONS]
     session.current_index = 0
     if not session.pending_slots:
         session.finished = True
@@ -184,12 +214,86 @@ def skip_slot(session: SessionState, slot_name: str) -> None:
 
 
 def fill_remaining_defaults(session: SessionState, template: Template) -> None:
-    """Backfill every required slot that was never resolved (caps hit, or a
-    non-asked required slot) with its static ``default_text``."""
-    for s in template.required_slots():
+    """Backfill every slot — required or optional — that was never resolved with
+    its static ``default_text``. Makes no LLM call: this is the "skip the rest,
+    use template defaults" path."""
+    for s in template.slots:
         if session.slots.get(s.name) is None:
             session.slots[s.name] = SlotValue(value=s.default_text, source="defaulted")
     session.finished = True
+
+
+_CONTEXT_DEFAULT_SYSTEM = """You are Keel. Some specification dimensions were not asked about, to \
+keep the session short. Given the project idea and the answers already collected, fill each \
+remaining dimension with ONE concrete value the developer would most likely accept — the same \
+kind of finished spec line the questions produce.
+
+Rules:
+- Be specific and fully consistent with the answers already given. Do not hedge, do not offer \
+  options, do not restate the question.
+- Do not invent product names, versions, or numeric figures that are not implied by what is \
+  already established.
+- Respond with a JSON object mapping each requested slot name to its value string. Include \
+  every slot asked for."""
+
+
+def _context_default_user(
+    session: SessionState, template: Template, missing: list[SlotDef]
+) -> str:
+    established = [
+        f"- {template.slot(n).label}: {v.value}"
+        for n, v in session.slots.items()
+        if v.value and template.slot(n)
+    ]
+    established_block = "\n".join(established) if established else "- nothing yet"
+    wanted = "\n".join(f"- {s.name} ({s.label}): {s.question_hint}" for s in missing)
+    return (
+        f'Project idea: "{session.original_prompt}"\n\n'
+        f"Already established:\n{established_block}\n\n"
+        f"Fill these dimensions:\n{wanted}\n\nJSON:"
+    )
+
+
+def fill_unasked_slots(
+    session: SessionState, template: Template, *, provider: "llm.Provider | None"
+) -> str | None:
+    """Fill every slot that was never asked (depth or the asked-question cap left
+    it out) with a value inferred from the accumulated answers — one LLM call for
+    all of them. Any slot the model does not return, or the whole call on failure,
+    falls back to the static ``default_text``. Returns an error string (and sets
+    ``session.degraded``) if the call failed, else ``None``. Always marks the
+    session finished."""
+    missing = [
+        s
+        for s in sorted(template.slots, key=lambda s: (s.priority, s.name))
+        if session.slots.get(s.name) is None
+    ]
+    if not missing:
+        session.finished = True
+        return None
+
+    error: str | None = None
+    if provider is not None:
+        result, error = capped_complete_json(
+            session,
+            _CONTEXT_DEFAULT_SYSTEM,
+            _context_default_user(session, template, missing),
+            provider=provider,
+        )
+        if error is None:
+            for s in missing:
+                value = str((result or {}).get(s.name, "")).strip()
+                if value:
+                    session.slots[s.name] = SlotValue(value=value, source="defaulted")
+
+    for s in missing:  # static fallback for anything still unfilled
+        if session.slots.get(s.name) is None:
+            session.slots[s.name] = SlotValue(value=s.default_text, source="defaulted")
+
+    if error is not None:
+        session.degraded = True
+    session.finished = True
+    return error
 
 
 # --------------------------------------------------------------------------- #

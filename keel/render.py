@@ -82,10 +82,17 @@ How to write it:
   echo the idea string back ("Deliver a working implementation of: ...") — that is banned.
 - "io_contract": describe the actual inputs and outputs the project implies — the shape of a \
   request and a response, or of an input file and an output file, with the fields that matter. \
-  Not just the fragment the developer typed.
+  Not just the fragment the developer typed. Then enumerate the interface surface IN FULL: \
+  every command, endpoint, function, or screen named or implied by the answers, each on its \
+  own line with its inputs and its output. List them all — not one example. If the answers \
+  describe a data model, describe each entity and the fields it carries.
 - "acceptance_criteria": a markdown bullet list of concrete, individually checkable statements \
   derived from the I/O contract and the definition of done. For anything with more than one \
   feature, give at least three.
+- "constraints": the hard limits (language, offline, no paid APIs, dependency limits) AND the \
+  runtime and scale. End it with the error-handling behaviour — what happens on bad input, a \
+  missing or unreadable resource, and a partial failure — as its own short paragraph or bullet \
+  group, drawn from the error-handling answer.
 - Put every fact in the section it belongs to, regardless of which answer it arrived in. \
   Runtime and scale details are CONSTRAINTS — put them under "constraints", never under \
 "context". "context" holds the original idea and background only.

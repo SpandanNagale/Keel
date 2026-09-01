@@ -25,6 +25,10 @@ def _conflict_call(system: str) -> bool:
     return "contradiction checker" in system
 
 
+def _context_default_call(system: str) -> bool:
+    return "were not asked about" in system
+
+
 _SYNTH_SECTIONS = {
     "context": "Background on the project and the people who will use it.",
     "objective": "Build the described tool. It removes a manual step for its user. "
@@ -44,6 +48,9 @@ def _happy_llm(system, user, **kw):
         return {}, None
     if _conflict_call(system):
         return {"conflicts": []}, None
+    if _context_default_call(system):
+        return {"data_model": "one Item record", "interfaces": "one command",
+                "error_handling": "bad input exits non-zero with a message"}, None
     if _synthesis_call(system):
         return dict(_SYNTH_SECTIONS), None
     return {"question": "How much data?", "recommended": "About 2,000 items, run weekly."}, None
@@ -85,7 +92,7 @@ def test_accept_every_default_completes_with_all_sections(monkeypatch):
                     "## Constraints", "## Acceptance criteria", "## Non-goals",
                     "## Open questions"):
         assert heading in combined
-    assert at.session_state.session.questions_asked < 8
+    assert at.session_state.session.questions_asked <= 8
     assert any("# " in c.value and "## Open questions" in c.value for c in at.code)
     assert combined.count("_Not specified") == 0  # no empty sections
     assert not at.exception
@@ -211,6 +218,32 @@ def test_keel_provider_ollama_runs_a_full_session_with_no_anthropic_key(monkeypa
 
     assert seen and set(seen) == {"ollama"}
     assert at.session_state.session.degraded is False
+    assert not at.exception
+
+
+def test_depth_selector_controls_how_many_questions_are_asked(monkeypatch):
+    at = _new_app(monkeypatch, _happy_llm)
+    at.text_area(key="idea_input").set_value("a tool to organise my downloads folder")
+    at.run()
+    at.radio(key="depth_choice").set_value("Quick")
+    at.run()
+    _btn(at, "Start").click()
+    at.run()
+
+    assert len(at.session_state.session.pending_slots) == 6  # Quick = 6 core slots
+
+    guard = 0
+    while not at.session_state.session.finished:
+        guard += 1
+        assert guard < 15
+        _btn(at, "Accept & continue").click()
+        at.run()
+
+    # optional slots were never asked but are still filled in the finished session
+    s = at.session_state.session
+    assert s.questions_asked == 6
+    for name in ("data_model", "interfaces", "error_handling"):
+        assert name in s.slots and s.slots[name].value
     assert not at.exception
 
 

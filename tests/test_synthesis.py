@@ -43,6 +43,7 @@ def _finished_session(template="data-pipeline",
     for name in list(s.pending_slots):
         slot = t.slot(name)
         engine.accept_answer(s, name, slot.default_text, recommended=slot.default_text)
+    engine.fill_unasked_slots(s, t, provider=None)  # static-fill anything depth left out
     return s
 
 
@@ -180,6 +181,38 @@ def test_resolved_contradiction_note_lands_in_open_questions(monkeypatch):
     assert err is None
     oq = md.split("## Open questions", 1)[1]
     assert "Conflict:" in oq and "resolved in favour of no auth" in oq
+
+
+# --- Phase 2: deeper slot set --------------------------------------------- #
+def test_synthesis_prompt_drives_interface_enumeration_and_error_handling():
+    sys_p = render._SYNTHESIS_SYSTEM.lower()
+    assert "enumerate the interface surface in full" in sys_p
+    assert "not one example" in sys_p
+    assert "data model" in sys_p
+    assert "error-handling behaviour" in sys_p
+
+
+def test_thorough_session_hands_synthesis_every_slot(monkeypatch):
+    captured = {}
+
+    def fake(system, user, **kw):
+        captured["user"] = user
+        return dict(_FULL_SECTIONS), None
+
+    monkeypatch.setattr("keel.llm.complete_json", fake)
+    s = engine.start_session("chat bot for meal planning", "default",
+                             created_date="2026-09-01", depth="thorough")
+    t = engine.load_template("default")
+    engine.freeze_pending(s, t)
+    for name in list(s.pending_slots):
+        slot = t.slot(name)
+        engine.accept_answer(s, name, slot.default_text, recommended=slot.default_text)
+    engine.fill_unasked_slots(s, t, provider=None)  # static-fill the trimmed slot
+
+    md, err = render.synthesize_spec(s, provider=PROV)
+    assert err is None
+    for name in ("data_model", "interfaces", "error_handling"):
+        assert f"[{name}]" in captured["user"]
 
 
 # --- Prompt integrity ------------------------------------------------------- #

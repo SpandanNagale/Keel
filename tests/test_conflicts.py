@@ -36,6 +36,7 @@ def _finished(template: str = "default", prompt: str = "build a small tool"):
     for name in list(s.pending_slots):
         slot = t.slot(name)
         engine.accept_answer(s, name, slot.default_text, recommended=slot.default_text)
+    engine.fill_unasked_slots(s, t, provider=None)
     return s
 
 

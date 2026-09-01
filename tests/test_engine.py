@@ -65,13 +65,25 @@ def test_slugify():
 # --------------------------------------------------------------------------- #
 # Session lifecycle
 # --------------------------------------------------------------------------- #
-def test_freeze_pending_orders_required_slots_by_priority(make_session):
-    session = make_session()
+def test_freeze_pending_selects_slots_by_depth(make_session):
     template = engine.load_template("default")
-    engine.freeze_pending(session, template)
-    assert session.pending_slots == [s.name for s in template.required_slots()]
-    assert session.current_index == 0
-    assert session.finished is False
+    required = [s.name for s in template.required_slots()]
+
+    quick = make_session()
+    quick.depth = "quick"
+    engine.freeze_pending(quick, template)
+    assert quick.pending_slots == required  # only the six core dimensions
+
+    standard = make_session()  # default depth
+    engine.freeze_pending(standard, template)
+    assert standard.pending_slots == required + ["data_model", "interfaces"]
+    assert standard.current_index == 0 and standard.finished is False
+
+    thorough = make_session()
+    thorough.depth = "thorough"
+    engine.freeze_pending(thorough, template)
+    assert len(thorough.pending_slots) == engine.MAX_ASKED_QUESTIONS  # 9 slots, capped at 8
+    assert "error_handling" not in thorough.pending_slots  # lowest priority, trimmed
 
 
 def test_accept_answer_classifies_source_and_advances(make_session):
@@ -102,15 +114,50 @@ def test_skip_slot_records_skip_and_advances(make_session):
     assert session.current_index == 1
 
 
-def test_fill_remaining_defaults_backfills_and_finishes(make_session):
+def test_fill_remaining_defaults_backfills_every_slot_and_finishes(make_session):
     session = make_session()
     template = engine.load_template("default")
     engine.freeze_pending(session, template)
     engine.fill_remaining_defaults(session, template)
     assert session.finished is True
-    for s in template.required_slots():
+    for s in template.slots:  # required AND optional
         assert session.slots[s.name].source == "defaulted"
         assert session.slots[s.name].value == s.default_text
+
+
+def test_fill_unasked_slots_uses_context_then_falls_back(make_session, stub_llm):
+    stub_llm(({"data_model": "one Contact record: name, email, phone"}, None))
+    session = make_session("dedupe my contacts export", "default")
+    session.depth = "quick"  # all three optional slots are unasked
+    template = engine.load_template("default")
+    engine.freeze_pending(session, template)
+    for name in list(session.pending_slots):
+        engine.accept_answer(session, name, "x", recommended="x")
+
+    err = engine.fill_unasked_slots(session, template, provider=_PROVIDER)
+    assert err is None
+    assert session.finished is True
+    # model-supplied value used where given...
+    assert session.slots["data_model"].value == "one Contact record: name, email, phone"
+    assert session.slots["data_model"].source == "defaulted"
+    # ...static default_text where the model said nothing
+    assert session.slots["error_handling"].value == template.slot("error_handling").default_text
+    assert session.slots["interfaces"].value == template.slot("interfaces").default_text
+
+
+def test_fill_unasked_slots_surfaces_failure_but_still_fills(make_session, stub_llm):
+    stub_llm((None, "APIConnectionError: boom"))
+    session = make_session("dedupe my contacts export", "default")
+    session.depth = "quick"
+    template = engine.load_template("default")
+    engine.freeze_pending(session, template)
+    for name in list(session.pending_slots):
+        engine.accept_answer(session, name, "x", recommended="x")
+
+    err = engine.fill_unasked_slots(session, template, provider=_PROVIDER)
+    assert err == "APIConnectionError: boom"
+    assert session.degraded is True
+    assert session.slots["error_handling"].value == template.slot("error_handling").default_text
 
 
 # --------------------------------------------------------------------------- #
@@ -129,7 +176,8 @@ def test_extract_prefilled_fills_slots_and_freeze_pending_skips_them(make_sessio
 
     engine.freeze_pending(session, template)
     assert "io_contract" not in session.pending_slots
-    assert len(session.pending_slots) == 5
+    # 6 required - 1 extracted + 2 optional (standard depth) = 7
+    assert len(session.pending_slots) == 7
 
 
 def test_extract_prefilled_surfaces_failure_and_sets_degraded(make_session, stub_llm):
@@ -218,7 +266,7 @@ def test_session_call_cap_refuses_the_eleventh_call(make_session, stub_llm):
 # --------------------------------------------------------------------------- #
 # End to end: accept every default
 # --------------------------------------------------------------------------- #
-def test_accepting_every_default_finishes_in_under_eight_questions(make_session, stub_llm):
+def test_accepting_every_default_finishes_in_at_most_eight_questions(make_session, stub_llm):
     stub_llm(({"question": "q?", "recommended": "a concrete recommended answer"}, None))
     session = make_session("dedupe my contacts export", "default")
     template = engine.load_template("default")
@@ -233,6 +281,6 @@ def test_accepting_every_default_finishes_in_under_eight_questions(make_session,
         q, rec, err = engine.next_question(session, template, provider=_PROVIDER)
         engine.accept_answer(session, slot.name, rec, recommended=rec)
 
-    assert session.questions_asked < 8
+    assert session.questions_asked <= engine.MAX_ASKED_QUESTIONS
     for s in template.required_slots():
         assert session.slots[s.name].value

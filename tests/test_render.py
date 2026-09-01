@@ -51,16 +51,19 @@ def test_default_strategy_never_leaks_into_any_rendered_spec():
 
 
 def test_skipped_slot_shows_placeholder_and_appears_in_open_questions():
+    template = engine.load_template("default")
     session = _session_all_defaulted("default")
-    session.slots["io_contract"] = SlotValue(value="", source="skipped")
+    # skip every slot mapped to the io_contract section so the section has nothing
+    for s in template.slots:
+        if s.section == "io_contract":
+            session.slots[s.name] = SlotValue(value="", source="skipped")
     md = render_markdown(session)
 
     io_block = md.split("## Input / Output contract\n", 1)[1].split("## ", 1)[0]
     assert "see Open questions" in io_block
 
     oq_block = md.split("## Open questions\n", 1)[1]
-    io_label = engine.load_template("default").slot("io_contract").label
-    assert io_label in oq_block
+    assert template.slot("io_contract").label in oq_block
 
 
 def test_degraded_session_carries_the_no_llm_note_in_open_questions():

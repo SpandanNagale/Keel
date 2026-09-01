@@ -139,7 +139,9 @@ def _generate_pending_question(byok: str, byok_provider: str) -> None:
     }
 
 
-def _start(prompt: str, template_name: str, byok: str, byok_provider: str) -> None:
+def _start(
+    prompt: str, template_name: str, depth: str, byok: str, byok_provider: str
+) -> None:
     prompt = prompt.strip()
     if not prompt or len(prompt) > MAX_PROMPT_CHARS:
         st.session_state.start_error = (
@@ -147,7 +149,9 @@ def _start(prompt: str, template_name: str, byok: str, byok_provider: str) -> No
         )
         return
 
-    session = engine.start_session(prompt, template_name, created_date=date.today().isoformat())
+    session = engine.start_session(
+        prompt, template_name, created_date=date.today().isoformat(), depth=depth
+    )
     template = _load_template(template_name)
 
     provider, is_shared, blocking = _provider_for_call(byok, byok_provider)
@@ -174,13 +178,21 @@ def _finalize(byok: str, byok_provider: str) -> None:
     session = st.session_state.session
     if not session or not session.finished or st.session_state.final_md is not None:
         return
+    template = _load_template(session.template_name)
 
     provider, is_shared, blocking = _provider_for_call(byok, byok_provider)
     if blocking is not None:
         session.degraded = True
         st.session_state.synth_error = blocking
+        engine.fill_unasked_slots(session, template, provider=None)  # static
         st.session_state.final_md = render_markdown(session)
         return
+
+    # Slots that depth or the asked-question cap left unasked are filled here,
+    # from the accumulated answers — one call for all of them, never re-asked.
+    if is_shared:
+        _record_shared_call()
+    engine.fill_unasked_slots(session, template, provider=provider)
 
     # Contradiction check first, as its own call — a model already committed to
     # writing a coherent document is motivated not to notice the inputs cannot be
@@ -306,6 +318,18 @@ def _view_intro(byok: str, byok_provider: str) -> None:
     if prompt.strip() and choice == auto:
         st.caption(f"Auto-detected: **{auto}**")
 
+    depth_label = st.radio(
+        "Depth",
+        ["Quick", "Standard", "Thorough"],
+        index=1,
+        horizontal=True,
+        key="depth_choice",
+        help="Quick asks the 6 core dimensions. Standard adds the data model and "
+        "interface surface. Thorough also asks about error handling. Slots not "
+        "asked are filled from context, never left blank.",
+    )
+    depth = {"Quick": "quick", "Standard": "standard", "Thorough": "thorough"}[depth_label]
+
     shared, _ = _shared_provider()
     if shared is None and not byok.strip():
         st.info(
@@ -315,7 +339,7 @@ def _view_intro(byok: str, byok_provider: str) -> None:
         )
 
     if st.button("Start", type="primary", key="start_btn", disabled=not prompt.strip()):
-        _start(prompt, choice, byok, byok_provider)
+        _start(prompt, choice, depth, byok, byok_provider)
         st.rerun()
 
     if st.session_state.start_error:

@@ -73,6 +73,9 @@ class SessionState(BaseModel):
     original_prompt: str
     template_name: str
     created_date: str
+    # How many slots to ASK about: "quick" (6), "standard" (8), "thorough" (9,
+    # trimmed to the asked cap). Optional slots not asked are defaulted, not omitted.
+    depth: str = "standard"
     # Ordered list of slot names still to ask about, frozen at Start so the
     # "Question X of N" progress counter never moves under the user.
     pending_slots: list[str] = Field(default_factory=list)

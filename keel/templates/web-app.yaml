@@ -75,3 +75,38 @@ slots:
     default_strategy: >-
       Describe the key user flows that must work end to end in a browser: what
       the user does, what they see, what persists. Two or three sentences.
+
+  - name: data_model
+    section: io_contract
+    label: Entities shown and edited
+    required: false
+    priority: 7
+    question_hint: "What are the entities a user views or edits, and what fields does each carry?"
+    default_text: "One or two entities implied by the idea, each with the fields the idea names plus an id and a created timestamp, stored in SQLite or a JSON file. No user or account entity."
+    default_strategy: >-
+      List each entity a user views or edits and the fields it carries, with
+      rough types. Use only what the idea names, plus an id. Note where it is
+      stored. Two or three sentences.
+
+  - name: interfaces
+    section: io_contract
+    label: Routes and screens
+    required: false
+    priority: 8
+    question_hint: "What is the full list of pages/routes, what does each show, and what does each form submit?"
+    default_text: "Every page the idea implies, each as a route with what it displays and what its form submits — typically a list view, a detail view, and a create/edit form. Server-rendered; no client-side routing."
+    default_strategy: >-
+      Enumerate every route/screen. One line each: what it shows and what its
+      form submits, and to which route. List all of them, not one example.
+
+  - name: error_handling
+    section: constraints
+    label: Error handling
+    required: false
+    priority: 9
+    question_hint: "What happens on an invalid form submission, a missing record, or a server error?"
+    default_text: "An invalid form re-renders the page with the entered values kept and the errors shown inline; a missing record shows a 404 page; a server error shows a plain error page without a stack trace."
+    default_strategy: >-
+      State the behaviour on an invalid form submission (re-render with errors),
+      a request for a missing record (404 page), and an unexpected server error
+      (plain error page). One or two sentences.

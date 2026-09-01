@@ -74,3 +74,39 @@ slots:
     default_strategy: >-
       Describe one concrete check: the request to send to each endpoint and the
       response shape and status code expected back. One or two sentences.
+
+  - name: data_model
+    section: io_contract
+    label: Resource schemas
+    required: false
+    priority: 7
+    question_hint: "What are the resources the API exposes, and what fields does each carry?"
+    default_text: "One or two resources implied by the idea, each a flat JSON object with the fields the idea names plus an id and a created timestamp. No relational joins."
+    default_strategy: >-
+      List each resource the API exposes and the fields it carries, with rough
+      JSON types. Use only what the idea names, plus an id. Two or three
+      sentences.
+
+  - name: interfaces
+    section: io_contract
+    label: Full endpoint list
+    required: false
+    priority: 8
+    question_hint: "What is the complete list of routes — method and path — and the request and response body of each?"
+    default_text: "The full set of routes the idea implies, each as method + path with its JSON request body and its JSON success response. Typically a create (POST), a fetch (GET by id), and a list (GET)."
+    default_strategy: >-
+      Enumerate every route as method + path. For each, give the request body
+      and the success response body, JSON on both sides. List all of them, not
+      one example.
+
+  - name: error_handling
+    section: constraints
+    label: Error responses
+    required: false
+    priority: 9
+    question_hint: "What does the API return on a malformed body, a missing resource, or an unexpected server error?"
+    default_text: "A malformed or invalid body returns 400 with a JSON error object naming the bad fields; a missing resource returns 404; an unexpected failure returns 500 with a generic message and no stack trace in the body."
+    default_strategy: >-
+      State the status code and response body for a malformed request, a
+      not-found resource, and an unexpected server error. JSON error shape. One
+      or two sentences.

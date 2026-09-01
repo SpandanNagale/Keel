@@ -75,3 +75,39 @@ slots:
     default_strategy: >-
       Describe one concrete post-run check: what to count, what to spot-check,
       and what "correct" looks like. One or two sentences.
+
+  - name: data_model
+    section: io_contract
+    label: Input and output record schema
+    required: false
+    priority: 7
+    question_hint: "What fields does one input record carry, and what fields does one output record carry?"
+    default_text: "The input record carries the fields the source already provides; the output record carries only the fields the idea names, plus a stable identifier. No nested structures unless the source has them."
+    default_strategy: >-
+      List the fields of one input record and one output record, with rough
+      types, using only what the idea and source imply. Note the key that links
+      them. Two or three sentences.
+
+  - name: interfaces
+    section: io_contract
+    label: Entry point and stages
+    required: false
+    priority: 8
+    question_hint: "How is the pipeline invoked, and what are its distinct stages from source to destination?"
+    default_text: "One command or script entry point that runs the whole pass: read from the source, transform each record, write to the destination. Stages are internal, not separately invokable."
+    default_strategy: >-
+      Name the entry point (command or function) and list the ordered stages
+      from source to destination. One line per stage: what it consumes and what
+      it produces. Do not invent an orchestration layer.
+
+  - name: error_handling
+    section: constraints
+    label: Error handling
+    required: false
+    priority: 9
+    question_hint: "What happens on a malformed record, an unreachable source, or a failure midway through the batch?"
+    default_text: "A malformed record is skipped and counted in a summary rather than aborting the run; an unreachable source fails fast with a clear message; a mid-batch failure leaves the destination unchanged or clearly marked incomplete."
+    default_strategy: >-
+      State the behaviour on a malformed record (skip-and-count vs abort), an
+      unreachable source, and a mid-batch failure — including what state the
+      destination is left in. One or two sentences.

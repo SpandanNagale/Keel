@@ -74,3 +74,38 @@ slots:
       Describe one concrete terminal check: the command line to run, the
       expected output, and the expected exit code. Mention the error path
       briefly. One or two sentences.
+
+  - name: data_model
+    section: io_contract
+    label: Records the tool works with
+    required: false
+    priority: 7
+    question_hint: "What does one record the tool reads or writes look like — which fields?"
+    default_text: "Plain lines or rows carrying the fields the idea names; no schema beyond what the input file already has."
+    default_strategy: >-
+      Describe the shape of one input record and one output record — the fields
+      and rough types — using only what the idea names. One or two sentences.
+
+  - name: interfaces
+    section: io_contract
+    label: Subcommands, flags, and arguments
+    required: false
+    priority: 8
+    question_hint: "What are the exact subcommands, positional arguments, and flags, and what does each do?"
+    default_text: "A single command with one or two positional arguments and a small set of flags (for example --output, --dry-run); no subcommands."
+    default_strategy: >-
+      Enumerate every subcommand, positional argument, and flag the idea
+      implies. One line each: what it takes and what it does. Do not invent a
+      subcommand tree the idea does not call for.
+
+  - name: error_handling
+    section: constraints
+    label: Error handling
+    required: false
+    priority: 9
+    question_hint: "What happens on a bad argument, a missing or unreadable file, or a failure partway through?"
+    default_text: "A bad argument or missing file prints a clear message to stderr and exits non-zero; a mid-run failure stops and reports progress so far, without leaving partly-written output."
+    default_strategy: >-
+      State the behaviour on a bad argument, a missing or unreadable file, and a
+      failure partway through — the stderr message, the exit code, and whether
+      partial output is left. One or two sentences.

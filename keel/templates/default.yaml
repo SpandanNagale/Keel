@@ -76,3 +76,39 @@ slots:
     default_strategy: >-
       Describe one concrete, observable check that proves the tool works — a
       command to run and what its output should look like. One or two sentences.
+
+  - name: data_model
+    section: io_contract
+    label: Core data model
+    required: false
+    priority: 7
+    question_hint: "What are the main entities and the fields each one carries?"
+    default_text: "One core record type holding the fields named or implied by the idea, kept in memory or a single local file; no relational schema and no migrations."
+    default_strategy: >-
+      Name the one or two core entities the idea implies and list the concrete
+      fields each carries, with a rough type. Stay within what the idea
+      supports; do not invent a schema.
+
+  - name: interfaces
+    section: io_contract
+    label: Interface surface
+    required: false
+    priority: 8
+    question_hint: "What are the exact functions, commands, or screens, and what does each take and return?"
+    default_text: "A single entry point — one function or one command — that takes the input the idea describes and returns the output it describes. No other surface."
+    default_strategy: >-
+      Enumerate every function, command, endpoint, or screen the idea implies.
+      For each, give its inputs and its output on one line. Do not add surfaces
+      the idea does not call for.
+
+  - name: error_handling
+    section: constraints
+    label: Error handling
+    required: false
+    priority: 9
+    question_hint: "What should happen on bad input, a missing file, or a partial failure?"
+    default_text: "Invalid or missing input stops with a clear message and a non-zero exit; a partial failure halts and reports what completed, leaving no half-written output behind."
+    default_strategy: >-
+      State what happens on bad input, on a missing or unreadable resource, and
+      on a partial failure. Name the observable behaviour — message, exit code,
+      no partial output. One or two sentences.
