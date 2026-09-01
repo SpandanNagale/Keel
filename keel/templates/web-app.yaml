@@ -1,0 +1,77 @@
+name: web-app
+title: Web application (with a UI)
+description: >-
+  A browser-facing application: pages a user navigates, forms they submit, data
+  shown back. Has a frontend by definition — this template never forbids one.
+
+slots:
+  - name: io_contract
+    section: io_contract
+    label: Pages, forms, and data shown
+    required: true
+    priority: 1
+    question_hint: "What pages or views does a user move through, what do they submit, and what data is displayed back?"
+    default_text: "The pages and forms the idea implies — typically a main view that lists or displays items and a form to create or edit one. User input is submitted over HTTP and the updated view is rendered back. Data persists between visits in a single local store (SQLite or a JSON file)."
+    default_strategy: >-
+      List the concrete pages/views a user navigates, what each form submits,
+      and what data each view shows. Name where data is stored. Two or three
+      sentences.
+
+  - name: runtime
+    section: context
+    label: Runtime
+    required: true
+    priority: 2
+    question_hint: "How is this served and run — a local dev server, a single deployed instance, a static host?"
+    default_text: "Runs as a single web server process (the framework's dev server locally); one instance, no load balancer."
+    default_strategy: >-
+      State how the app is served and run, based on the idea. One sentence.
+      Default to a single server process on the framework's dev server.
+
+  - name: scale
+    section: context
+    label: Scale
+    required: true
+    priority: 3
+    question_hint: "How many users and how much data — a personal tool, a small team, or public traffic?"
+    default_text: "A personal or small-team tool: a handful of concurrent users and up to a few thousand stored records."
+    default_strategy: >-
+      Give expected concurrent users and stored-record volume, based on the
+      idea. One sentence. Assume a small private audience unless the idea says
+      otherwise.
+
+  - name: constraints
+    section: constraints
+    label: Hard constraints
+    required: true
+    priority: 4
+    question_hint: "Any hard limits — a required framework or language, no build step, no paid services, must work offline?"
+    default_text: "Python with Flask (server-rendered templates, minimal JavaScript), no separate frontend build step, no paid services, and a file-based or SQLite datastore."
+    default_strategy: >-
+      List the hard limits the idea implies (framework, language, build step,
+      paid services, datastore, offline). One or two sentences. Default to a
+      server-rendered Python app with no build step.
+
+  - name: non_goals
+    section: non_goals
+    label: Non-goals
+    required: true
+    priority: 5
+    question_hint: "What should the agent explicitly NOT build — user accounts and auth, payments, a design system, a native mobile app, real-time updates, admin tooling?"
+    default_text: "No user accounts or authentication, no payments or billing, no design system or theming, no native mobile app, no real-time or websocket updates, and no separate admin panel. A functional, plainly-styled web UI is in scope."
+    default_strategy: >-
+      List 3-6 things the agent should NOT build for a web app — auth, payments,
+      design system, mobile app, real-time updates, admin panel, i18n, SEO
+      work. Name them explicitly. Do NOT list the frontend or UI itself as a
+      non-goal; this project has one.
+
+  - name: done
+    section: acceptance
+    label: Definition of done
+    required: true
+    priority: 6
+    question_hint: "How will you know it works — which user flows must complete end to end in a browser?"
+    default_text: "Loading the app in a browser shows the main view; submitting the primary form persists the data and re-renders the view with the new item; reloading the page shows the persisted state."
+    default_strategy: >-
+      Describe the key user flows that must work end to end in a browser: what
+      the user does, what they see, what persists. Two or three sentences.

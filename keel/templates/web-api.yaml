@@ -1,58 +1,76 @@
 name: web-api
-description: Template for HTTP APIs and web services.
-slots:
-  - name: endpoints
-    section: io_contract
-    required: true
-    label: Endpoints
-    question_hint: "What routes/methods should exist, and what does each accept and return?"
-    default_strategy: "A minimal set of endpoints directly implied by the prompt (e.g. one POST to submit input, one GET to retrieve a result), returning JSON."
-    priority: 1
+title: Web API / HTTP service
+description: >-
+  An HTTP service: defined routes, JSON request and response bodies, run as a
+  server process.
 
+slots:
   - name: io_contract
     section: io_contract
+    label: Endpoints and request / response contract
     required: true
-    label: Request / response contract
-    question_hint: "What does a request body look like, and what does a successful response look like?"
-    default_strategy: "A JSON request body with the fields the prompt implies, and a JSON response echoing a status plus the result payload."
-    priority: 2
+    priority: 1
+    question_hint: "What routes and methods should exist, and what does each one accept and return?"
+    default_text: "A minimal set of endpoints implied by the idea — typically one POST to submit input and one GET to retrieve a result. Requests and responses are JSON; every response carries a status field alongside the result payload."
+    default_strategy: >-
+      List the specific routes (method + path) the idea implies, and for each,
+      the request body and the success response body. JSON on both sides. Two
+      or three sentences.
 
-  - name: non_goals
-    section: non_goals
+  - name: runtime
+    section: context
+    label: Runtime
     required: true
-    label: Non-goals
-    question_hint: "What should the agent explicitly NOT build — authentication, a database, rate limiting, a frontend?"
-    default_strategy: "Skip authentication, a persistent database, rate limiting, and any frontend — build only the endpoints described, backed by in-memory or file-based storage."
+    priority: 2
+    question_hint: "How is this served — locally via the framework's dev server, or deployed to something specific?"
+    default_text: "Runs locally via the framework's built-in dev server (for example uvicorn); no specific deployment target."
+    default_strategy: >-
+      State how the service is run and whether a deployment target is named,
+      based on the idea. One sentence. Default to the local dev server.
+
+  - name: scale
+    section: context
+    label: Scale
+    required: true
     priority: 3
+    question_hint: "Expected request volume and concurrency — a few requests a day, or real production traffic?"
+    default_text: "Low traffic — single-digit requests per second at most, one instance, no horizontal scaling or load balancing."
+    default_strategy: >-
+      Give expected requests per second, concurrency, and instance count, based
+      on the idea. One sentence. Assume low single-instance traffic unless the
+      idea says otherwise.
 
   - name: constraints
     section: constraints
-    required: true
     label: Hard constraints
-    question_hint: "Any hard limits — auth requirements, no paid APIs, a specific framework/language, existing dependencies?"
-    default_strategy: "Assume no auth, no paid APIs, and reuse whatever framework/ecosystem is already in this repo (or a minimal Python/FastAPI service if none detected)."
+    required: true
     priority: 4
+    question_hint: "Any hard limits — a required framework or language, no paid APIs, no database, existing dependencies?"
+    default_text: "Python with FastAPI, no paid APIs, in-memory or single-file storage rather than a database server, and no auth layer."
+    default_strategy: >-
+      List the hard limits the idea implies (framework, language, storage, paid
+      APIs, auth). One or two sentences. Default to Python + FastAPI with
+      in-memory storage.
 
-  - name: runtime
-    section: constraints
+  - name: non_goals
+    section: non_goals
+    label: Non-goals
     required: true
-    label: Runtime
-    question_hint: "How is this served — locally for development, or deployed somewhere specific?"
-    default_strategy: "Assume it runs locally via the framework's built-in dev server; no deployment target unless the prompt names one."
     priority: 5
-
-  - name: scale
-    section: constraints
-    required: true
-    label: Scale
-    question_hint: "Expected request volume and concurrency — a handful of requests a day, or real production traffic?"
-    default_strategy: "Assume low traffic (single-digit requests per minute, one instance, no need for horizontal scaling)."
-    priority: 6
+    question_hint: "What should the agent explicitly NOT build — authentication, a persistent database, rate limiting, a frontend, deployment config?"
+    default_text: "No authentication or user accounts, no persistent database, no rate limiting, no frontend, and no deployment or CI config — just the endpoints."
+    default_strategy: >-
+      List 3-5 things the agent should NOT build for an API (auth, database,
+      rate limiting, frontend, deployment config, API versioning). Name them
+      explicitly.
 
   - name: done
     section: acceptance
-    required: true
     label: Definition of done
-    question_hint: "How will you know the API works — a manual request, a smoke test, specific responses to check?"
-    default_strategy: "Starting the server and hitting each endpoint with a sample request returns the documented response shape with a 2xx status."
-    priority: 7
+    required: true
+    priority: 6
+    question_hint: "How will you know the API works — a manual curl, a smoke test, specific responses to check?"
+    default_text: "Starting the server and hitting each endpoint with a sample request (curl or the framework's test client) returns the documented response shape with a 2xx status."
+    default_strategy: >-
+      Describe one concrete check: the request to send to each endpoint and the
+      response shape and status code expected back. One or two sentences.

@@ -1,131 +1,270 @@
-"""The single entry point for every LLM call Keel makes.
+"""The one and only place Keel talks to an LLM.
 
-Every call in the codebase must go through complete() / complete_json() so that:
-  - the eval harness can stub this module instead of hitting the network, and
-  - degradation on API failure (or on no provider being configured) is handled
-    in exactly one place.
+``complete_json`` is the single entry point. It returns a ``(result, error)``
+tuple — never a bare ``None``, never a raised exception. Exactly one of the two
+is set:
 
-Provider selection is a fixed priority chain, picked by whichever API key is
-present in the environment -- Anthropic, then Groq, then Ollama Cloud:
-  ANTHROPIC_API_KEY -> claude-opus-5
-  GROQ_API_KEY      -> openai/gpt-oss-120b
-  OLLAMA_API_KEY    -> gpt-oss:120b (via Ollama Cloud, https://ollama.com)
+  * success  -> ``(dict, None)``
+  * failure  -> ``(None, "<human-readable reason>")``
 
-Both functions return None on any failure (no key configured, network error,
-API error, bad JSON) -- callers are required to fall back to static template
-text rather than crash mid-session.
+The caller is required to surface ``error`` to the user. Silent fallback to
+template text — the bug that made the previous build never call the model — is
+structurally impossible here: there is no code path that discards the reason.
+
+Providers:
+
+  * ``groq``, ``ollama-cloud``, ``anthropic`` — hosted, chosen by which API key
+    is configured (``PROVIDER_ORDER``), or forced with ``KEEL_PROVIDER``.
+  * ``ollama`` — a **local** daemon at ``http://localhost:11434``, for
+    development only. Selected exclusively via ``KEEL_PROVIDER=ollama``; needs no
+    key. The deployed app never reaches this path unless a deployer explicitly
+    sets that env var, and if it does and nothing answers on localhost the error
+    says so — it never silently degrades to "as if the call succeeded".
+
+Each provider enforces JSON: Groq via a native response mode, Ollama via
+``format="json"``, Anthropic via an assistant-turn prefill of ``{``. A model that
+answers in prose still fails ``json.loads`` with a *distinguishable* parse error.
+
+No provider branching exists outside this module.
 """
 from __future__ import annotations
 
 import json
 import os
-from typing import Optional
+from dataclasses import dataclass
+from typing import Mapping, Optional
 
-ANTHROPIC_MODEL = "claude-opus-5"
-GROQ_MODEL = "openai/gpt-oss-120b"
-OLLAMA_MODEL = "gpt-oss:120b"
-
-
-def _active_provider() -> Optional[str]:
-    if os.environ.get("ANTHROPIC_API_KEY"):
-        return "anthropic"
-    if os.environ.get("GROQ_API_KEY"):
-        return "groq"
-    if os.environ.get("OLLAMA_API_KEY"):
-        return "ollama"
-    return None
-
-
-def _call_anthropic(system: str, user: str, max_tokens: int, json_mode: bool) -> Optional[str]:
-    import anthropic
-
-    client = anthropic.Anthropic(api_key=os.environ["ANTHROPIC_API_KEY"])
-    response = client.messages.create(
-        model=ANTHROPIC_MODEL,
-        max_tokens=max_tokens,
-        system=system,
-        output_config={"effort": "low"},
-        messages=[{"role": "user", "content": user}],
-    )
-    for block in response.content:
-        if block.type == "text":
-            return block.text
-    return None
-
-
-def _call_groq(system: str, user: str, max_tokens: int, json_mode: bool) -> Optional[str]:
-    from groq import Groq
-
-    client = Groq(api_key=os.environ["GROQ_API_KEY"])
-    kwargs = {"response_format": {"type": "json_object"}} if json_mode else {}
-    response = client.chat.completions.create(
-        model=GROQ_MODEL,
-        max_tokens=max_tokens,
-        messages=[
-            {"role": "system", "content": system},
-            {"role": "user", "content": user},
-        ],
-        **kwargs,
-    )
-    return response.choices[0].message.content
-
-
-def _call_ollama(system: str, user: str, max_tokens: int, json_mode: bool) -> Optional[str]:
-    from ollama import Client
-
-    client = Client(
-        host="https://ollama.com",
-        headers={"Authorization": f"Bearer {os.environ['OLLAMA_API_KEY']}"},
-    )
-    kwargs = {"format": "json"} if json_mode else {}
-    response = client.chat(
-        model=OLLAMA_MODEL,
-        messages=[
-            {"role": "system", "content": system},
-            {"role": "user", "content": user},
-        ],
-        options={"num_predict": max_tokens},
-        **kwargs,
-    )
-    return response["message"]["content"]
-
-
-_CALLERS = {
-    "anthropic": _call_anthropic,
-    "groq": _call_groq,
-    "ollama": _call_ollama,
+# Default model per provider. Override the active one with the KEEL_MODEL secret
+# (or KEEL_OLLAMA_MODEL for the local daemon).
+DEFAULT_MODELS: dict[str, str] = {
+    "groq": "openai/gpt-oss-120b",
+    "ollama-cloud": "gpt-oss:120b",
+    "anthropic": "claude-haiku-4-5-20251001",
+    "ollama": "llama3.2",
 }
 
+# When several hosted keys are present and KEEL_PROVIDER is unset, the first of
+# these with a key wins.
+PROVIDER_ORDER: tuple[str, ...] = ("groq", "ollama-cloud", "anthropic")
 
-def _call(system: str, user: str, max_tokens: int, json_mode: bool) -> Optional[str]:
-    provider = _active_provider()
+# Env / secret name carrying each hosted provider's key. The local "ollama"
+# provider is deliberately absent — it needs no key.
+SECRET_KEYS: dict[str, str] = {
+    "groq": "GROQ_API_KEY",
+    "ollama-cloud": "OLLAMA_API_KEY",
+    "anthropic": "ANTHROPIC_API_KEY",
+}
+_NEEDS_KEY = frozenset(SECRET_KEYS)
+
+OLLAMA_CLOUD_HOST = "https://ollama.com"
+LOCAL_OLLAMA_HOST = "http://localhost:11434"
+
+# One question is never worth more than this many output tokens.
+MAX_OUTPUT_TOKENS = 800
+
+# Back-compat alias: some callers/tests still reference a single default.
+DEFAULT_MODEL = DEFAULT_MODELS["anthropic"]
+
+
+@dataclass(frozen=True)
+class Provider:
+    name: str
+    api_key: str
+    model: str
+    host: str = ""  # only meaningful for the ollama providers
+
+
+def resolve_provider(
+    available: Mapping[str, str],
+    *,
+    model_override: str | None = None,
+    env: Mapping[str, str] | None = None,
+) -> tuple[Optional[Provider], Optional[str]]:
+    """Pick a provider.
+
+    ``KEEL_PROVIDER`` (from ``env``, default ``os.environ``) forces one:
+      * ``ollama``       -> the local daemon, no key.
+      * ``groq`` / ``anthropic`` / ``ollama-cloud`` -> that hosted provider,
+        erroring if its key is absent from ``available``.
+    Unset -> the first hosted key present, in ``PROVIDER_ORDER``.
+    """
+    env = env if env is not None else os.environ
+    forced = str(env.get("KEEL_PROVIDER", "")).strip().lower()
+
+    if forced == "ollama":
+        model = (
+            (model_override or "").strip()
+            or str(env.get("KEEL_OLLAMA_MODEL", "")).strip()
+            or DEFAULT_MODELS["ollama"]
+        )
+        return Provider("ollama", api_key="", model=model, host=LOCAL_OLLAMA_HOST), None
+
+    if forced in _NEEDS_KEY:
+        key = str(available.get(SECRET_KEYS[forced]) or available.get(forced) or "").strip()
+        if not key:
+            return None, f"KEEL_PROVIDER={forced} but {SECRET_KEYS[forced]} is not configured"
+        model = (model_override or "").strip() or DEFAULT_MODELS[forced]
+        return Provider(forced, key, model), None
+
+    if forced:
+        return None, f"KEEL_PROVIDER={forced!r} is not a known provider"
+
+    for name in PROVIDER_ORDER:
+        key = str(available.get(SECRET_KEYS[name]) or available.get(name) or "").strip()
+        if key:
+            model = (model_override or "").strip() or DEFAULT_MODELS[name]
+            return Provider(name, key, model), None
+    return None, (
+        "no API key configured (set one of "
+        + ", ".join(SECRET_KEYS.values())
+        + ", or KEEL_PROVIDER=ollama for a local daemon)"
+    )
+
+
+def complete_json(
+    system: str,
+    user: str,
+    *,
+    provider: Optional[Provider],
+    max_tokens: int = MAX_OUTPUT_TOKENS,
+) -> tuple[Optional[dict], Optional[str]]:
+    """Make one call to ``provider`` and parse a JSON object out of the reply.
+
+    Returns ``(parsed_dict, None)`` on success or ``(None, reason)`` on any
+    failure: no provider, missing key, import failure, network/API error, empty
+    reply, non-JSON reply, or JSON that is not an object.
+    """
     if provider is None:
-        return None
+        return None, "no LLM provider configured for this session"
+    if provider.name in _NEEDS_KEY and not str(provider.api_key).strip():
+        return None, f"no {provider.name} API key configured for this session"
+
+    dispatch = {
+        "groq": _groq_raw,
+        "ollama-cloud": _ollama_raw,
+        "ollama": _ollama_raw,
+        "anthropic": _anthropic_raw,
+    }
+    fn = dispatch.get(provider.name)
+    if fn is None:
+        return None, f"unknown provider {provider.name!r}"
+
     try:
-        return _CALLERS[provider](system, user, max_tokens, json_mode)
-    except Exception:
-        return None
+        raw, error = fn(system, user, provider, max_tokens)
+    except Exception as exc:  # noqa: BLE001 - every failure must become a reason string
+        return None, f"{provider.name}: {type(exc).__name__}: {exc}"
+
+    if error is not None:
+        return None, error
+    if not raw or not raw.strip():
+        return None, f"{provider.name} returned no text content"
+    return _parse_json_object(raw)
 
 
-def complete(system: str, user: str, *, max_tokens: int = 1024, effort: str = "low") -> Optional[str]:
-    return _call(system, user, max_tokens, json_mode=False)
+# --------------------------------------------------------------------------- #
+# Per-provider calls: return (raw_text, error). Exceptions bubble to caller.
+# --------------------------------------------------------------------------- #
+def _anthropic_raw(system, user, provider, max_tokens):
+    try:
+        import anthropic
+    except ImportError as exc:  # pragma: no cover
+        return None, f"anthropic package not importable: {exc}"
+
+    client = anthropic.Anthropic(api_key=provider.api_key)
+    response = client.messages.create(
+        model=provider.model,
+        max_tokens=max_tokens,
+        system=system,
+        messages=[
+            {"role": "user", "content": user},
+            {"role": "assistant", "content": "{"},
+        ],
+    )
+    parts = [b.text for b in response.content if getattr(b, "type", None) == "text"]
+    if not parts:
+        return None, "anthropic returned no text content"
+    return "{" + "".join(parts), None
 
 
-def complete_json(system: str, user: str, *, max_tokens: int = 1024, effort: str = "low") -> Optional[dict]:
-    text = _call(system, user, max_tokens, json_mode=True)
-    if text is None:
-        return None
+def _groq_raw(system, user, provider, max_tokens):
+    try:
+        import groq
+    except ImportError as exc:  # pragma: no cover
+        return None, f"groq package not importable: {exc}"
 
-    text = text.strip()
+    client = groq.Groq(api_key=provider.api_key)
+    response = client.chat.completions.create(
+        model=provider.model,
+        max_tokens=max_tokens,
+        response_format={"type": "json_object"},
+        messages=[
+            {"role": "system", "content": system},
+            {"role": "user", "content": user},
+        ],
+    )
+    if not response.choices:
+        return None, "groq returned no choices"
+    return response.choices[0].message.content, None
+
+
+def _ollama_raw(system, user, provider, max_tokens):
+    try:
+        import ollama
+    except ImportError as exc:  # pragma: no cover
+        return None, f"ollama package not importable: {exc}"
+
+    host = provider.host or OLLAMA_CLOUD_HOST
+    headers = {"Authorization": f"Bearer {provider.api_key}"} if provider.api_key else None
+    client = ollama.Client(host=host, headers=headers)
+    try:
+        response = client.chat(
+            model=provider.model,
+            messages=[
+                {"role": "system", "content": system},
+                {"role": "user", "content": user},
+            ],
+            format="json",
+            options={"num_predict": max_tokens},
+        )
+    except Exception as exc:  # noqa: BLE001
+        name = type(exc).__name__.lower()
+        text = str(exc).lower()
+        if "connect" in name or "connection" in text or "refused" in text or "max retries" in text:
+            return None, (
+                f"Ollama not reachable at {host} — is the local daemon running "
+                f"(`ollama serve`) and the model pulled (`ollama pull {provider.model}`)?"
+            )
+        raise
+
+    content = response.get("message", {}).get("content") if hasattr(response, "get") else None
+    if content is None:
+        content = getattr(getattr(response, "message", None), "content", None)
+    return content, None
+
+
+# --------------------------------------------------------------------------- #
+def _parse_json_object(raw: str) -> tuple[Optional[dict], Optional[str]]:
+    text = raw.strip()
     if text.startswith("```"):
         text = text.strip("`")
-        if text.lower().startswith("json"):
-            text = text[4:]
-        text = text.strip()
+        if text.lstrip().lower().startswith("json"):
+            text = text.lstrip()[4:]
+    text = text.strip()
 
     try:
         parsed = json.loads(text)
     except (json.JSONDecodeError, ValueError):
-        return None
+        # One recovery attempt: trim anything trailing the final closing brace
+        # (reasoning models sometimes append a note after the object).
+        end = text.rfind("}")
+        if end != -1:
+            try:
+                parsed = json.loads(text[: end + 1])
+            except (json.JSONDecodeError, ValueError):
+                return None, f"model did not return valid JSON; got: {raw[:200]!r}"
+        else:
+            return None, f"model did not return valid JSON; got: {raw[:200]!r}"
 
-    return parsed if isinstance(parsed, dict) else None
+    if not isinstance(parsed, dict):
+        return None, f"model returned JSON but not an object; got: {raw[:200]!r}"
+    return parsed, None

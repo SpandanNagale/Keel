@@ -1,204 +1,312 @@
-"""The slot-filling state machine. Deterministic control flow driving stateless LLM calls.
+"""Slot state machine, template loading, and the two — and only two — LLM call
+sites in Keel.
 
-Termination condition: every required slot has been addressed (filled, defaulted,
-detected, extracted, marked not-applicable, or explicitly skipped). This is a plain
-loop over template.slots — never "the LLM decides it has asked enough."
+No Streamlit import here. ``app.py`` owns the widgets and the session-state
+mirror; this module owns the logic and is unit-tested as plain Python.
+
+The two call sites:
+  1. :func:`extract_prefilled` — pull slots the opening idea already answers.
+  2. :func:`next_question`     — generate one question + recommended default.
+
+Both go through :func:`capped_complete_json`, which enforces the per-session call
+cap and returns a ``(result, error)`` tuple. Failure is never silent: the error
+string is handed back to the caller to surface, and ``session.degraded`` is set.
+The one-shot synthesis pass in :mod:`keel.render` uses the same capped helper.
 """
 from __future__ import annotations
 
 import re
-from datetime import datetime, timezone
+from functools import lru_cache
+from importlib import resources
 from pathlib import Path
 
 import yaml
 
 from keel import llm
-from keel.models import DetectionResult, SessionState, SlotDef, SlotSource, SlotState, Template
+from keel.models import SessionState, SlotDef, SlotValue, Template
 
-TEMPLATES_DIR = Path(__file__).parent / "templates"
+# Hard cap: a single session may make at most this many LLM calls. The next one
+# is refused with an error rather than made.
+MAX_LLM_CALLS_PER_SESSION = 10
+
+# Opening ideas longer than this are rejected before any call is made.
+MAX_PROMPT_CHARS = 500
+
+_TEMPLATE_NAMES = ["default", "cli", "data-pipeline", "web-api", "web-app"]
+
+# Keyword -> template. First-pass heuristic only; the user can override in the UI.
+#
+# Order matters for tie-breaking: a prompt that scores equally for several
+# templates is resolved by _TIE_ORDER below, and anything genuinely ambiguous
+# (no clear winner) falls to "default" rather than to a specific template whose
+# non-goals might contradict the project premise ("hotel website" -> web-api,
+# whose non-goals forbid a frontend, was the motivating bug).
+_KEYWORDS: dict[str, tuple[str, ...]] = {
+    "web-app": (
+        "website", "web site", "web app", "webapp", "web application",
+        "landing page", "dashboard", "frontend", "front end", "front-end",
+        "site", "portal", "web page", "webpage", "web ui", "web interface",
+        "marketing page", "single page app", "spa",
+    ),
+    "web-api": (
+        "api", "apis", "endpoint", "endpoints", "rest", "restful", "graphql",
+        "grpc", "webhook", "webhooks", "web service", "microservice",
+        "openapi", "swagger", "json api",
+    ),
+    "data-pipeline": (
+        "pipeline", "etl", "scrape", "scraper", "scraping", "crawl", "crawler",
+        "ingest", "extract", "transform", "dataset", "data set", "warehouse",
+        "cluster", "clustering", "dedupe", "deduplicate", "aggregate",
+        "batch", "records", "migrate", "migration", "csv", "parquet",
+        "embeddings", "index them", "sync",
+    ),
+    "cli": (
+        "cli", "command line", "command-line", "commandline", "terminal",
+        "script", "rename", "convert", "flag", "flags", "stdin", "stdout",
+        "argument", "arguments", "subcommand", "one-off tool", "shell",
+    ),
+}
+
+# When scores tie, earlier in this list wins. web-app beats web-api because a
+# "booking website with an API" is still a website; a UI-forbidding template is
+# the worse wrong answer.
+_TIE_ORDER = ("web-app", "data-pipeline", "cli", "web-api")
 
 
+# --------------------------------------------------------------------------- #
+# Templates
+# --------------------------------------------------------------------------- #
+def list_templates() -> list[str]:
+    return list(_TEMPLATE_NAMES)
+
+
+@lru_cache(maxsize=None)
 def load_template(name: str) -> Template:
-    path = TEMPLATES_DIR / f"{name}.yaml"
-    if not path.exists():
-        raise ValueError(f"Unknown template: {name}")
-    data = yaml.safe_load(path.read_text(encoding="utf-8"))
+    if name not in _TEMPLATE_NAMES:
+        raise ValueError(f"unknown template: {name!r}")
+    try:
+        text = (
+            resources.files("keel.templates").joinpath(f"{name}.yaml").read_text("utf-8")
+        )
+    except (FileNotFoundError, ModuleNotFoundError):
+        text = (Path(__file__).parent / "templates" / f"{name}.yaml").read_text("utf-8")
+    data = yaml.safe_load(text)
     return Template.model_validate(data)
 
 
-def list_templates() -> list[str]:
-    return sorted(p.stem for p in TEMPLATES_DIR.glob("*.yaml"))
+def select_template(prompt: str) -> str:
+    """Pick a template by keyword frequency.
+
+    No match -> "default". A tie between specific templates is broken by
+    ``_TIE_ORDER`` (web-app before web-api, so a "website" is never routed to a
+    UI-forbidding API template).
+    """
+    low = f" {prompt.lower()} "
+    scores = {name: 0 for name in _KEYWORDS}
+    for name, kws in _KEYWORDS.items():
+        for kw in kws:
+            # word-boundary hits are worth more than a bare substring hit
+            scores[name] += 2 * low.count(f" {kw} ")
+            scores[name] += 1 if kw in low else 0
+
+    best_score = max(scores.values())
+    if best_score == 0:
+        return "default"
+    winners = [name for name, s in scores.items() if s == best_score]
+    if len(winners) == 1:
+        return winners[0]
+    for name in _TIE_ORDER:
+        if name in winners:
+            return name
+    return "default"
 
 
-def slugify(text: str) -> str:
+def slugify(text: str, *, max_len: int = 40) -> str:
     slug = re.sub(r"[^a-z0-9]+", "-", text.lower()).strip("-")
-    return slug[:60] or "project"
+    slug = slug[:max_len].strip("-")
+    return slug or "project"
 
 
-def derive_title(prompt: str) -> str:
-    text = prompt.strip().rstrip(".")
+# --------------------------------------------------------------------------- #
+# Session lifecycle
+# --------------------------------------------------------------------------- #
+def start_session(prompt: str, template_name: str, *, created_date: str) -> SessionState:
+    """Build an empty session. Makes no LLM call."""
+    return SessionState(
+        original_prompt=prompt.strip(),
+        template_name=template_name,
+        created_date=created_date,
+    )
+
+
+def freeze_pending(session: SessionState, template: Template) -> None:
+    """Fix the ordered list of slots still to ask about. Call once, after
+    extraction, so the ``Question X of N`` counter never shifts."""
+    session.pending_slots = [
+        s.name
+        for s in template.required_slots()
+        if session.slots.get(s.name) is None
+    ]
+    session.current_index = 0
+    if not session.pending_slots:
+        session.finished = True
+
+
+def current_slot(session: SessionState, template: Template) -> SlotDef | None:
+    if session.current_index >= len(session.pending_slots):
+        return None
+    return template.slot(session.pending_slots[session.current_index])
+
+
+def _advance(session: SessionState) -> None:
+    session.current_index += 1
+    if session.current_index >= len(session.pending_slots):
+        session.finished = True
+
+
+def accept_answer(session: SessionState, slot_name: str, text: str, *, recommended: str) -> None:
+    """Record an answer. If the text is unchanged from the recommended default,
+    the source is ``defaulted``; otherwise ``asked``."""
+    text = text.strip()
     if not text:
-        return "Untitled Project"
-    if len(text) > 80:
-        text = text[:80].rsplit(" ", 1)[0] + "..."
-    return text[0].upper() + text[1:]
+        text = recommended.strip()
+        source = "defaulted"
+    else:
+        source = "defaulted" if text == recommended.strip() else "asked"
+    session.slots[slot_name] = SlotValue(value=text, source=source)
+    session.questions_asked += 1
+    _advance(session)
 
 
-def evaluate_skip_if(expr: str, detection: DetectionResult, slots: dict[str, SlotState]) -> bool:
-    if not expr:
-        return False
-    context = {
-        "detection": detection.model_dump(),
-        "slots": {name: state.value for name, state in slots.items()},
-    }
-    try:
-        return bool(eval(expr, {"__builtins__": {}}, context))  # noqa: S307 - restricted namespace
-    except Exception:
-        return False
+def skip_slot(session: SessionState, slot_name: str) -> None:
+    session.slots[slot_name] = SlotValue(value="", source="skipped")
+    _advance(session)
 
 
-EXTRACTION_SYSTEM = """You extract information from a short, vague software project prompt.
-Given the prompt and a list of "slots" (dimensions a coding agent needs pinned down),
-identify ONLY the slots the prompt already answers explicitly or very strongly implies.
-Do not guess or invent information the prompt does not support — when in doubt, omit the slot.
-Respond with ONLY a JSON object mapping slot name to a short extracted phrase.
-Omit any slot the prompt does not address. No explanations, no markdown fences."""
+def fill_remaining_defaults(session: SessionState, template: Template) -> None:
+    """Backfill every required slot that was never resolved (caps hit, or a
+    non-asked required slot) with its static ``default_text``."""
+    for s in template.required_slots():
+        if session.slots.get(s.name) is None:
+            session.slots[s.name] = SlotValue(value=s.default_text, source="defaulted")
+    session.finished = True
 
 
-def extract_slots(prompt: str, template: Template) -> dict[str, str]:
-    slot_list = "\n".join(f"- {s.name}: {s.question_hint}" for s in template.slots)
-    user = f'Prompt: "{prompt}"\n\nSlots:\n{slot_list}\n\nJSON:'
-    result = llm.complete_json(EXTRACTION_SYSTEM, user, max_tokens=512, effort="low")
-    if not result:
-        return {}
-    valid_names = {s.name for s in template.slots}
-    return {
-        name: str(value).strip()
-        for name, value in result.items()
-        if name in valid_names and str(value).strip()
-    }
+# --------------------------------------------------------------------------- #
+# LLM call sites
+# --------------------------------------------------------------------------- #
+def capped_complete_json(
+    session: SessionState,
+    system: str,
+    user: str,
+    *,
+    provider: "llm.Provider | None",
+    max_tokens: int = llm.MAX_OUTPUT_TOKENS,
+) -> tuple[dict | None, str | None]:
+    """The only way any part of Keel makes an LLM call. Enforces the per-session
+    call cap, increments the counter, and forwards to :func:`keel.llm.complete_json`."""
+    if session.call_count >= MAX_LLM_CALLS_PER_SESSION:
+        return None, f"session LLM call limit reached ({MAX_LLM_CALLS_PER_SESSION} calls)"
+    session.call_count += 1
+    return llm.complete_json(system, user, provider=provider, max_tokens=max_tokens)
 
 
-QUESTION_SYSTEM = """You write ONE clarifying question for a developer building a software
-project, to pin down a specific missing detail (a "slot") before handing the project off
-to a coding agent. You are given the slot's static hint and a strategy for choosing a
-sensible default answer.
+_EXTRACTION_SYSTEM = """You are Keel, which compiles vague software project ideas into precise build specs.
+
+Given a one-line idea and a list of specification slots, decide which slots the idea ALREADY \
+answers — explicitly, or by clear and direct implication. For each, extract a short factual \
+phrase (at most 15 words) stating what the idea says about that slot.
+
+Omit any slot the idea leaves unstated. Do not guess, do not fill from convention, do not \
+infer beyond what the words support.
+
+Respond with a JSON object mapping slot name to the extracted phrase. Use {} if the idea \
+answers none of the slots."""
+
+
+def extract_prefilled(
+    session: SessionState, template: Template, *, provider: "llm.Provider | None"
+) -> str | None:
+    """One LLM call: fill slots the opening idea already answers. Mutates
+    ``session.slots`` (source ``extracted``). Returns an error string on failure
+    and sets ``session.degraded``; returns ``None`` on success."""
+    slot_lines = "\n".join(f"- {s.name}: {s.question_hint}" for s in template.slots)
+    user = f'Idea: "{session.original_prompt}"\n\nSlots:\n{slot_lines}\n\nJSON:'
+
+    result, error = capped_complete_json(session, _EXTRACTION_SYSTEM, user, provider=provider)
+    if error is not None:
+        session.degraded = True
+        return error
+
+    valid = {s.name for s in template.slots}
+    junk = {"", "unknown", "n/a", "na", "none", "not specified", "unspecified", "tbd"}
+    for name, value in (result or {}).items():
+        if name not in valid or session.slots.get(name) is not None:
+            continue
+        phrase = str(value).strip()
+        if phrase.lower() in junk:
+            continue
+        session.slots[name] = SlotValue(value=phrase, source="extracted")
+    return None
+
+
+_QUESTION_SYSTEM = """You are Keel. Ask a software developer ONE clarifying question about their \
+project idea, targeting a single dimension they left unspecified, and propose a recommended \
+answer they can accept unchanged.
 
 Rules:
-- Ask about exactly this one slot. Do not ask about anything else.
-- Propose a concrete, specific recommended default the developer can accept by pressing Enter.
-- Use the project context (original prompt, detected repo info, slots already filled) to make
-  the question and default as specific as possible instead of generic.
-- Keep the question to one sentence.
-Respond with ONLY a JSON object: {"question": "...", "default": "..."}. No markdown fences."""
+- One question only. At most 25 words. Concrete. No preamble, no "it depends".
+- The recommended answer is a finished spec line: specific formats, numbers, and names — \
+never a menu of options, never a hedge.
+- Do not re-ask anything under "Already established".
+- Do not name specific library versions, and avoid recommending niche tools whose current \
+health you cannot verify.
+- Respond with a JSON object: {"question": "...", "recommended": "..."}"""
 
 
-def generate_question(slot: SlotDef, session: SessionState) -> tuple[str, str]:
-    filled = "\n".join(
-        f"- {name}: {state.value}" for name, state in session.slots.items() if state.value
+def _question_user(slot: SlotDef, session: SessionState, template: Template) -> str:
+    established = [
+        f"- {template.slot(n).label}: {v.value}"
+        for n, v in session.slots.items()
+        if v.source in ("extracted", "asked", "defaulted") and v.value and template.slot(n)
+    ]
+    established_block = "\n".join(established) if established else "- nothing yet"
+    return (
+        f'Project idea: "{session.original_prompt}"\n\n'
+        f"Already established:\n{established_block}\n\n"
+        f"Target slot: {slot.label} ({slot.name})\n"
+        f"What it must pin down: {slot.question_hint}\n"
+        f"How to choose the recommended answer: {slot.default_strategy}\n\n"
+        f"JSON:"
     )
-    context = (
-        f'Original prompt: "{session.original_prompt}"\n'
-        f"Detected project: {session.detection.summary or '(nothing detected)'}\n"
-        f"Slots already filled:\n{filled or '(none yet)'}\n\n"
-        f"Slot to ask about: {slot.name}\n"
-        f"Static hint: {slot.question_hint}\n"
-        f"Default strategy: {slot.default_strategy}"
+
+
+def next_question(
+    session: SessionState, template: Template, *, provider: "llm.Provider | None"
+) -> tuple[str, str, str | None]:
+    """Generate the question + recommended default for the slot at
+    ``current_index``. Returns ``(question, recommended, error)``. On any
+    failure, returns the slot's static ``question_hint`` / ``default_text`` and a
+    non-null error, and sets ``session.degraded``."""
+    slot = current_slot(session, template)
+    if slot is None:
+        return "", "", "no pending slot"
+
+    result, error = capped_complete_json(
+        session, _QUESTION_SYSTEM, _question_user(slot, session, template),
+        provider=provider,
     )
-    result = llm.complete_json(QUESTION_SYSTEM, context, max_tokens=400, effort="low")
-    if result and result.get("question") and result.get("default"):
-        return str(result["question"]).strip(), str(result["default"]).strip()
-    return slot.question_hint, slot.default_strategy
+    if error is not None:
+        session.degraded = True
+        return slot.question_hint, slot.default_text, error
 
-
-class Engine:
-    def __init__(self, session: SessionState, template: Template):
-        self.session = session
-        self.template = template
-
-    @classmethod
-    def start(
-        cls,
-        prompt: str,
-        template_name: str,
-        detection: DetectionResult,
-        *,
-        extract: bool = True,
-    ) -> "Engine":
-        template = load_template(template_name)
-        session = SessionState(
-            created_at=datetime.now(timezone.utc).isoformat(),
-            original_prompt=prompt,
-            template_name=template_name,
-            title=derive_title(prompt),
-            detection=detection,
-            slots={s.name: SlotState() for s in template.slots},
+    question = str((result or {}).get("question", "")).strip()
+    recommended = str((result or {}).get("recommended") or (result or {}).get("default", "")).strip()
+    if not question or not recommended:
+        session.degraded = True
+        return (
+            slot.question_hint,
+            slot.default_text,
+            f"model response missing question/recommended fields: {result!r}",
         )
-        engine = cls(session, template)
-        engine._mark_not_applicable()
-        if extract:
-            engine._apply_extraction()
-        return engine
-
-    def _mark_not_applicable(self) -> None:
-        for slot in self.template.slots:
-            if slot.skip_if and evaluate_skip_if(slot.skip_if, self.session.detection, self.session.slots):
-                self.session.slots[slot.name] = SlotState(source=SlotSource.NOT_APPLICABLE)
-
-    def _apply_extraction(self) -> None:
-        extracted = extract_slots(self.session.original_prompt, self.template)
-        for name, value in extracted.items():
-            state = self.session.slots.get(name)
-            if state and state.source is None:
-                self.session.slots[name] = SlotState(value=value, source=SlotSource.EXTRACTED)
-
-    def apply_detection_prefill(self, confirmed: bool) -> None:
-        if not confirmed:
-            return
-        summary = self.session.detection.summary
-        if not summary:
-            return
-        value = summary[0].upper() + summary[1:]
-        for name in ("runtime", "constraints"):
-            state = self.session.slots.get(name)
-            if state and state.source is None:
-                self.session.slots[name] = SlotState(value=value, source=SlotSource.DETECTED)
-
-    def _is_answered(self, name: str) -> bool:
-        state = self.session.slots.get(name)
-        if state is None:
-            return False
-        if state.value:
-            return True
-        return state.source in (SlotSource.NOT_APPLICABLE, SlotSource.SKIPPED)
-
-    def is_filled(self, name: str) -> bool:
-        return self._is_answered(name)
-
-    def remaining_required_slots(self) -> list[SlotDef]:
-        return [s for s in self.template.slots if s.required and not self._is_answered(s.name)]
-
-    def quick_priority_slots(self, limit: int = 3) -> list[SlotDef]:
-        remaining = sorted(self.remaining_required_slots(), key=lambda s: s.priority)
-        return remaining[:limit]
-
-    def is_complete(self) -> bool:
-        return len(self.remaining_required_slots()) == 0
-
-    def generate_question_for(self, slot: SlotDef) -> tuple[str, str]:
-        return generate_question(slot, self.session)
-
-    def apply_answer(self, slot_name: str, raw: str, recommended_default: str) -> None:
-        raw = raw.strip()
-        self.session.questions_asked += 1
-        if raw == "":
-            self.session.slots[slot_name] = SlotState(value=recommended_default, source=SlotSource.DEFAULTED)
-        elif raw.lower() == "skip":
-            self.session.slots[slot_name] = SlotState(value=None, source=SlotSource.SKIPPED)
-        else:
-            self.session.slots[slot_name] = SlotState(value=raw, source=SlotSource.ASKED)
-
-    def default_remaining_silently(self) -> None:
-        for slot in self.remaining_required_slots():
-            _, default = self.generate_question_for(slot)
-            self.session.slots[slot.name] = SlotState(value=default, source=SlotSource.DEFAULTED)
+    return question, recommended, None

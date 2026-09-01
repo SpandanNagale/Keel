@@ -1,0 +1,6 @@
+streamlit>=1.40
+anthropic>=0.40
+groq>=1.6
+ollama>=0.6
+pydantic>=2.6
+pyyaml>=6.0

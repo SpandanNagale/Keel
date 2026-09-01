@@ -1,58 +1,76 @@
 name: cli
-description: Template for command-line tools and scripts.
+title: Command-line tool
+description: >-
+  A tool invoked from a terminal: takes arguments or stdin, writes to stdout or
+  files, exits with a status code.
+
 slots:
   - name: io_contract
     section: io_contract
+    label: Input / output contract
     required: true
-    label: Input / Output
-    question_hint: "What input does the command take (files, stdin, arguments) and what does it print or write?"
-    default_strategy: "Take input as one or more file paths (or stdin if piped), and write output to stdout by default with an optional --output flag to write to a file."
     priority: 1
+    question_hint: "What input does the command take (arguments, files, stdin) and what does it print or write?"
+    default_text: "Takes one or more file paths as arguments (or reads stdin when piped) and writes results to stdout, with an optional --output flag to write a file instead."
+    default_strategy: >-
+      Describe the argument/stdin input and the stdout/file output the idea
+      implies. Name the primary positional argument and whether stdin is
+      accepted. One or two sentences.
 
-  - name: non_goals
-    section: non_goals
+  - name: runtime
+    section: context
+    label: Runtime
     required: true
-    label: Non-goals
-    question_hint: "What should the agent explicitly NOT build — a GUI, a server mode, config files, a plugin system?"
-    default_strategy: "Skip a GUI, a server/daemon mode, a plugin system, and packaging for distribution — build only the single command described."
     priority: 2
+    question_hint: "Is this a one-shot command, or is it wrapped in a cron job or a shell pipeline you care about?"
+    default_text: "A one-shot command run manually from a terminal; safe to drop into a shell pipeline but not scheduled."
+    default_strategy: >-
+      State whether the command is run manually, scheduled, or used inside a
+      pipeline, based on the idea. One sentence. Default to manual invocation.
 
-  - name: argument_surface
-    section: io_contract
+  - name: scale
+    section: context
+    label: Scale
     required: true
-    label: Argument surface
-    question_hint: "What flags, arguments, and subcommands should the CLI expose?"
-    default_strategy: "A single positional argument for the main input, plus --output/-o and --help — no subcommands unless the prompt implies distinct operations."
     priority: 3
+    question_hint: "Roughly how much data does a single invocation process?"
+    default_text: "A single local run over a small-to-moderate input — up to a few thousand lines or files."
+    default_strategy: >-
+      Give an order-of-magnitude size for one invocation (lines, files, bytes),
+      based on the idea. One sentence. Assume a small local run.
 
   - name: constraints
     section: constraints
-    required: true
     label: Hard constraints
-    question_hint: "Any hard limits — offline only, no paid APIs, a specific language, existing dependencies to reuse or avoid?"
-    default_strategy: "Assume no paid APIs, no network calls beyond what's essential, and reuse whatever language/ecosystem is already in this repo (or Python if none detected)."
+    required: true
     priority: 4
+    question_hint: "Any hard limits — offline only, no paid APIs, a required language, existing dependencies to reuse or avoid?"
+    default_text: "Offline-friendly, no paid APIs, standard library plus one or two well-known packages, single-file script if practical."
+    default_strategy: >-
+      List the hard limits the idea implies (language, offline, dependency
+      count, single-file). One sentence. Default to offline, no paid APIs,
+      minimal dependencies.
+
+  - name: non_goals
+    section: non_goals
+    label: Non-goals
+    required: true
+    priority: 5
+    question_hint: "What should the agent explicitly NOT build — a GUI, a daemon/server mode, a config file format, a plugin system, distribution packaging?"
+    default_text: "No GUI, no daemon or server mode, no config file format, no plugin system, and no packaging for distribution — just the one command."
+    default_strategy: >-
+      List 3-5 things the agent should NOT build for a CLI tool (GUI, server
+      mode, config format, plugin system, packaging, subcommand sprawl). Name
+      them explicitly.
 
   - name: done
     section: acceptance
-    required: true
     label: Definition of done
-    question_hint: "How will you know the command works — what's the observable signal?"
-    default_strategy: "Running the command against a sample input from the terminal produces the documented output with exit code 0, and a bad input produces a clear error with a non-zero exit code."
-    priority: 5
-
-  - name: error_behavior
-    section: constraints
     required: true
-    label: Error behaviour
-    question_hint: "How should the tool behave on bad input or failure — exit codes, error messages, partial output?"
-    default_strategy: "Print a clear one-line error to stderr and exit with a non-zero status code; never write partial or corrupt output files."
     priority: 6
-
-  - name: scale
-    section: constraints
-    required: false
-    label: Scale
-    question_hint: "Roughly how much data will a single run process?"
-    default_strategy: "Assume a single local run over a small-to-moderate input (up to a few thousand lines or files)."
-    priority: 7
+    question_hint: "How will you know the command works — what is the observable signal?"
+    default_text: "Running the command against a sample input prints the documented output and exits 0; a bad input prints a clear error to stderr and exits non-zero."
+    default_strategy: >-
+      Describe one concrete terminal check: the command line to run, the
+      expected output, and the expected exit code. Mention the error path
+      briefly. One or two sentences.

@@ -1,58 +1,77 @@
 name: data-pipeline
-description: Template for ETL, scraping, batch, and data-processing pipelines.
+title: Data pipeline
+description: >-
+  Moves and reshapes data: reads from a source, transforms records, writes to a
+  destination. Batch or streaming.
+
 slots:
   - name: io_contract
     section: io_contract
+    label: Source, destination, and record shape
     required: true
-    label: Input / Output
-    question_hint: "What's the data source and the destination format — files, a database, an API, a message queue?"
-    default_strategy: "Read from local files or a documented API/source in the prompt, and write results to a single structured local file (JSON or CSV)."
     priority: 1
+    question_hint: "What is the data source and the destination, and what does one input record look like versus one output record?"
+    default_text: "Reads from the local files or documented source named in the idea, transforms each record, and writes results to a single structured local file (JSON Lines or CSV). One output record per input item, carrying only the fields the idea names."
+    default_strategy: >-
+      Name the source, the destination, and the format on each side. Sketch the
+      minimal input record and output record using only fields the idea names.
+      Two or three sentences.
+
+  - name: runtime
+    section: context
+    label: Runtime
+    required: true
+    priority: 2
+    question_hint: "Where does this run — a manual script, a cron job, or an orchestrator like Airflow, Dagster, or Prefect?"
+    default_text: "A manually invoked local script — no scheduler and no orchestrator."
+    default_strategy: >-
+      State whether the pipeline is run manually, on cron, or under an
+      orchestrator, based on the idea. One sentence. Default to a manual local
+      script unless the idea names a schedule.
 
   - name: scale
-    section: constraints
-    required: true
+    section: context
     label: Scale
-    question_hint: "How much data, how often — one-time backfill, hourly batch, streaming, and roughly how many records?"
-    default_strategy: "Assume a one-time or on-demand batch run over a small-to-moderate dataset (hundreds to low tens of thousands of records), not a continuous stream."
-    priority: 2
-
-  - name: schema
-    section: io_contract
     required: true
-    label: Data schema
-    question_hint: "What does one input record look like, and what fields must the output contain?"
-    default_strategy: "Infer the minimal record shape implied by the prompt (one record per source item, with the fields explicitly named in the prompt); leave undocumented fields out rather than guessing extras."
     priority: 3
-
-  - name: non_goals
-    section: non_goals
-    required: true
-    label: Non-goals
-    question_hint: "What should the agent explicitly NOT build — a scheduler, retries/backoff, a database, monitoring/alerting?"
-    default_strategy: "Skip building a scheduler, a database, monitoring/alerting, and elaborate retry logic — a single reliable pass over the data is enough."
-    priority: 4
+    question_hint: "How much data, how often — a one-time backfill, an hourly batch, a stream — and roughly how many records?"
+    default_text: "A one-time or on-demand batch over a small-to-moderate dataset — hundreds to low tens of thousands of records — not a continuous stream."
+    default_strategy: >-
+      Give volume (record count), frequency (one-off / hourly / streaming), and
+      data size, based on the idea. One or two sentences. Assume a bounded batch
+      unless the idea implies a stream.
 
   - name: constraints
     section: constraints
-    required: true
     label: Hard constraints
-    question_hint: "Any hard limits — offline only, no paid APIs, rate limits to respect, a specific language, existing dependencies?"
-    default_strategy: "Assume no paid APIs, respect any obvious rate limits on the data source, and reuse whatever language/ecosystem is already in this repo (or Python if none detected)."
-    priority: 5
-
-  - name: runtime
-    section: constraints
     required: true
-    label: Runtime
-    question_hint: "Where does this pipeline run — a manual script, a cron job, an orchestrator (Airflow/Dagster/Prefect)?"
-    default_strategy: "Assume a manually invoked local script — no scheduler or orchestrator — unless the repo already has one installed."
-    priority: 6
+    priority: 4
+    question_hint: "Any hard limits — offline only, no paid APIs, source rate limits to respect, a required language, existing dependencies?"
+    default_text: "No paid APIs, respect obvious rate limits on the source, Python with pandas or the standard library, and no new datastore to provision."
+    default_strategy: >-
+      List the hard limits the idea implies (language, offline, paid APIs, rate
+      limits, datastore). One or two sentences. Default to Python, no paid APIs,
+      no new infrastructure.
+
+  - name: non_goals
+    section: non_goals
+    label: Non-goals
+    required: true
+    priority: 5
+    question_hint: "What should the agent explicitly NOT build — a scheduler, retry/backoff logic, a database, monitoring and alerting, a dashboard?"
+    default_text: "No scheduler, no retry/backoff framework, no database, no monitoring or alerting, and no dashboard — one reliable pass over the data is enough."
+    default_strategy: >-
+      List 3-5 things the agent should NOT build for a pipeline (scheduler,
+      retry framework, database, monitoring, alerting, dashboard, CDC). Name
+      them explicitly.
 
   - name: done
     section: acceptance
-    required: true
     label: Definition of done
+    required: true
+    priority: 6
     question_hint: "How will you know the pipeline ran correctly — record counts, spot checks, a validation step?"
-    default_strategy: "Running the pipeline once produces the output file with a record count that roughly matches the input, and a handful of spot-checked records look correct."
-    priority: 7
+    default_text: "One run produces the output with a record count that roughly matches the input, and a handful of spot-checked records have the right fields and values."
+    default_strategy: >-
+      Describe one concrete post-run check: what to count, what to spot-check,
+      and what "correct" looks like. One or two sentences.

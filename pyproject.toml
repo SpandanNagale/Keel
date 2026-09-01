@@ -4,28 +4,27 @@ build-backend = "setuptools.build_meta"
 
 [project]
 name = "keel"
-version = "0.1.0"
-description = "A CLI prompt compiler: turns a vague project idea into an agent-ready prompt."
+version = "0.2.0"
+description = "Turn a vague software project idea into an agent-ready markdown prompt."
 readme = "README.md"
 requires-python = ">=3.11"
 dependencies = [
-    "typer>=0.12",
-    "rich>=13.7",
-    "pydantic>=2.6",
-    "pyyaml>=6.0",
+    "streamlit>=1.40",
     "anthropic>=0.40",
     "groq>=1.6",
     "ollama>=0.6",
+    "pydantic>=2.6",
+    "pyyaml>=6.0",
 ]
 
 [project.optional-dependencies]
 dev = ["pytest>=8.0"]
-
-[project.scripts]
-keel = "keel.cli:app"
 
 [tool.setuptools.packages.find]
 include = ["keel*"]
 
 [tool.setuptools.package-data]
 keel = ["templates/*.yaml"]
+
+[tool.pytest.ini_options]
+testpaths = ["tests"]

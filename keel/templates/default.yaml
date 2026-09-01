@@ -1,50 +1,78 @@
 name: default
-description: General-purpose template for tools, scripts, and utilities with no clearer project-type signal.
+title: General software project
+description: >-
+  Fallback template for any idea that does not clearly read as a CLI tool, a data
+  pipeline, or a web API.
+
 slots:
   - name: io_contract
     section: io_contract
+    label: Input / output contract
     required: true
-    label: Input / Output
-    question_hint: "What goes in, what comes out, and in what format?"
-    default_strategy: "Infer the most literal input/output pair implied by the prompt (e.g. read local files, write a structured file back), preferring plain formats (JSON, CSV, plain text) over anything requiring new infrastructure."
     priority: 1
+    question_hint: "What goes in, what comes out, and in what format?"
+    default_text: "Reads the local files or inputs named in the idea and writes a single structured output file (JSON or plain text) alongside them."
+    default_strategy: >-
+      State the most literal input/output pair the idea implies. Name concrete
+      formats (JSON, CSV, plain text, stdout). Prefer formats that need no new
+      infrastructure. One or two sentences.
 
-  - name: non_goals
-    section: non_goals
+  - name: runtime
+    section: context
+    label: Runtime
     required: true
-    label: Non-goals
-    question_hint: "What should the agent explicitly NOT build — auth, a database, a UI, test scaffolding, config management?"
-    default_strategy: "Skip authentication, a database, a UI, packaging/distribution, and comprehensive test suites — build only the working core described in the prompt."
     priority: 2
+    question_hint: "Where does this run — a one-off CLI command, a cron job, a long-running server, a notebook, or interactively?"
+    default_text: "A one-off script run manually from the developer's machine."
+    default_strategy: >-
+      Pick the single simplest runtime the idea implies (manual local script
+      unless it mentions scheduling or serving). One sentence. Do not list
+      alternatives.
+
+  - name: scale
+    section: context
+    label: Scale
+    required: true
+    priority: 3
+    question_hint: "What volume, frequency, and data size should this handle?"
+    default_text: "A single user running it occasionally over a small local dataset — tens to low thousands of items."
+    default_strategy: >-
+      Give a concrete order-of-magnitude estimate for volume, frequency, and
+      data size, based on what the idea implies. One sentence. Assume small and
+      single-user unless the idea says otherwise.
 
   - name: constraints
     section: constraints
-    required: true
     label: Hard constraints
-    question_hint: "Any hard limits — offline only, no paid APIs, a specific language, existing dependencies to reuse or avoid?"
-    default_strategy: "Assume no paid APIs, no network calls beyond what's essential, and reuse whatever language/ecosystem is already in this repo (or Python if none detected)."
-    priority: 3
-
-  - name: runtime
-    section: constraints
     required: true
-    label: Runtime
-    question_hint: "Where does this run — a one-off CLI command, a cron job, a long-running server, a notebook, or interactively on your machine?"
-    default_strategy: "Assume a one-off local CLI script invoked manually, since no scheduling or serving need was mentioned."
     priority: 4
+    question_hint: "Any hard limits — offline only, no paid APIs, a required language, existing dependencies to reuse or avoid?"
+    default_text: "No paid APIs, minimal network use, Python with only widely-used libraries, and no new services to stand up."
+    default_strategy: >-
+      List the hard limits the idea implies as short phrases in one
+      sentence (language, offline, no paid APIs, dependency limits). If the idea
+      implies none, state the conservative default: Python, no paid APIs, no new
+      infrastructure.
 
-  - name: scale
-    section: constraints
+  - name: non_goals
+    section: non_goals
+    label: Non-goals
     required: true
-    label: Scale
-    question_hint: "What volume, frequency, or size of data should this handle?"
-    default_strategy: "Assume a single-user, one-off or occasional run over a small local dataset (tens to low thousands of items) unless the prompt implies otherwise."
     priority: 5
+    question_hint: "What should the agent explicitly NOT build — auth, a database, a UI, a config system, a test suite, packaging?"
+    default_text: "No authentication, no database, no web or desktop UI, no packaging for distribution, and no exhaustive test suite — just the working core."
+    default_strategy: >-
+      List 3-5 concrete things the agent should NOT build, drawn from the usual
+      over-engineering traps for this kind of idea (auth, database, UI, config
+      system, plugin system, packaging, broad test suite). Name them explicitly.
 
   - name: done
     section: acceptance
-    required: true
     label: Definition of done
-    question_hint: "How will you know this works — what's the observable signal?"
-    default_strategy: "Running the tool once against real or sample input produces the expected output artifact without errors, and the output is manually spot-checked for correctness."
+    required: true
     priority: 6
+    question_hint: "How will you know it works — what is the observable signal?"
+    default_text: "Running it once against real or sample input produces the expected output with no errors, and the output is spot-checked by hand."
+    default_strategy: >-
+      Describe one concrete, observable check that proves the tool works — a
+      command to run and what its output should look like. One or two sentences.

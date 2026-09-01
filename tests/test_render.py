@@ -1,10 +1,10 @@
-from datetime import datetime, timezone
+from __future__ import annotations
 
-from keel.engine import load_template
-from keel.models import DetectionResult, SessionState, SlotSource, SlotState
+from keel import engine
+from keel.models import SessionState, SlotValue
 from keel.render import render_markdown
 
-REQUIRED_SECTIONS = [
+HEADINGS = [
     "## Context",
     "## Objective",
     "## Input / Output contract",
@@ -15,58 +15,71 @@ REQUIRED_SECTIONS = [
 ]
 
 
-def _make_session(template_name: str = "default") -> SessionState:
-    template = load_template(template_name)
-    slots = {}
-    for slot in template.slots:
-        slots[slot.name] = SlotState(value=f"answer for {slot.name}", source=SlotSource.ASKED)
-    return SessionState(
-        created_at=datetime.now(timezone.utc).isoformat(),
-        original_prompt="build a widget",
-        template_name=template_name,
-        title="Widget Builder",
-        detection=DetectionResult(summary="a python project"),
-        slots=slots,
-    )
+def _session_all_defaulted(template_name: str, prompt: str = "build a widget") -> SessionState:
+    template = engine.load_template(template_name)
+    session = engine.start_session(prompt, template_name, created_date="2026-09-01")
+    session.slots = {
+        s.name: SlotValue(value=s.default_text, source="defaulted")
+        for s in template.slots
+    }
+    session.finished = True
+    return session
 
 
-def test_all_sections_present_in_fixed_order():
-    session = _make_session()
-    md = render_markdown(session)
-    positions = [md.index(h) for h in REQUIRED_SECTIONS]
+def test_all_seven_sections_present_and_in_order():
+    md = render_markdown(_session_all_defaulted("default"))
+    positions = [md.index(h) for h in HEADINGS]
     assert positions == sorted(positions)
+    assert md.startswith("# Build a widget")
 
 
-def test_no_section_is_left_empty_even_with_no_slots_filled():
-    template = load_template("default")
-    session = SessionState(
-        created_at=datetime.now(timezone.utc).isoformat(),
-        original_prompt="build a widget",
-        template_name="default",
-        title="Widget Builder",
-        detection=DetectionResult(),
-        slots={s.name: SlotState() for s in template.slots},
-    )
+def test_no_section_is_empty_when_every_default_is_accepted():
+    for name in engine.list_templates():
+        md = render_markdown(_session_all_defaulted(name))
+        blocks = md.split("## ")
+        for block in blocks[1:]:
+            heading, _, body = block.partition("\n")
+            assert body.strip(), f"{name}: section {heading!r} rendered empty"
+
+
+def test_default_strategy_never_leaks_into_any_rendered_spec():
+    for name in engine.list_templates():
+        template = engine.load_template(name)
+        md = render_markdown(_session_all_defaulted(name))
+        for slot in template.slots:
+            assert slot.default_strategy not in md, f"{name}.{slot.name} leaked default_strategy"
+
+
+def test_skipped_slot_shows_placeholder_and_appears_in_open_questions():
+    session = _session_all_defaulted("default")
+    session.slots["io_contract"] = SlotValue(value="", source="skipped")
     md = render_markdown(session)
-    for i, heading in enumerate(REQUIRED_SECTIONS):
-        start = md.index(heading) + len(heading)
-        end = md.index(REQUIRED_SECTIONS[i + 1]) if i + 1 < len(REQUIRED_SECTIONS) else len(md)
-        body = md[start:end].strip()
-        assert body, f"section {heading!r} was empty"
+
+    io_block = md.split("## Input / Output contract\n", 1)[1].split("## ", 1)[0]
+    assert "see Open questions" in io_block
+
+    oq_block = md.split("## Open questions\n", 1)[1]
+    io_label = engine.load_template("default").slot("io_contract").label
+    assert io_label in oq_block
 
 
-def test_skipped_slot_appears_in_open_questions_not_its_section():
-    session = _make_session()
-    session.slots["non_goals"] = SlotState(value=None, source=SlotSource.SKIPPED)
+def test_degraded_session_carries_the_no_llm_note_in_open_questions():
+    session = _session_all_defaulted("default")
+    session.degraded = True
     md = render_markdown(session)
-    open_section = md[md.index("## Open questions"):]
-    assert "Non-goals" in open_section
-    non_goals_section = md[md.index("## Non-goals"):md.index("## Open questions")]
-    assert "answer for non_goals" not in non_goals_section
+    oq_block = md.split("## Open questions\n", 1)[1]
+    assert "without LLM assistance" in oq_block
 
 
-def test_title_and_prompt_in_context():
-    session = _make_session()
+def test_open_questions_present_even_when_nothing_skipped():
+    md = render_markdown(_session_all_defaulted("default"))
+    oq_block = md.split("## Open questions\n", 1)[1]
+    assert "None — every required dimension" in oq_block
+
+
+def test_title_derives_from_prompt_and_is_trimmed():
+    session = _session_all_defaulted("default", prompt="  a" + " very" * 40 + " long idea.  ")
     md = render_markdown(session)
-    assert md.startswith("# Widget Builder")
-    assert "build a widget" in md
+    title_line = md.splitlines()[0]
+    assert title_line.startswith("# A")
+    assert len(title_line) <= 75

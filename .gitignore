@@ -7,7 +7,5 @@ dist/
 .venv/
 venv/
 
-# Keel's own output directory shares its name with the source package when
-# `keel` is run from inside this repo -- ignore generated artifacts, keep source.
-keel/*.md
-keel/*.json
+# Streamlit secrets — API keys live here, server-side only, never committed.
+.streamlit/secrets.toml

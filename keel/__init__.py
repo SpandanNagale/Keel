@@ -1,3 +1,3 @@
-"""Keel — a CLI prompt compiler that turns a vague project idea into an agent-ready prompt."""
+"""Keel — turn a vague software project idea into an agent-ready markdown prompt."""
 
-__version__ = "0.1.0"
+__version__ = "0.2.0"
