@@ -1,0 +1,64 @@
+/* Keel — only what the [theme] block in .streamlit/config.toml cannot reach.
+   Loaded once by app.py (_inject_css). No animations, no gradients. */
+
+/* ---- typographic scale -------------------------------------------------- */
+.stApp h1 { font-size: 1.9rem; letter-spacing: -0.01em; }
+.stApp h2 { font-size: 1.35rem; margin-top: 0.4rem; }
+.stApp h3 { font-size: 1.1rem; color: #eef4fa; }
+
+/* tighten the gap Streamlit leaves under the title */
+.block-container { padding-top: 2.6rem; max-width: 52rem; }
+
+/* ---- code blocks ------------------------------------------------------- */
+.stApp code, .stApp pre {
+  font-family: "SFMono-Regular", ui-monospace, "Cascadia Code", Consolas, monospace;
+  font-size: 0.82rem;
+}
+.stApp pre {
+  border: 1px solid #2a3b4d;
+  border-radius: 8px;
+}
+
+/* ---- source-label chips (sidebar progress + review step) ------------- */
+.keel-chip {
+  display: inline-block;
+  padding: 0.05rem 0.5rem;
+  border-radius: 999px;
+  font-size: 0.72rem;
+  font-weight: 600;
+  line-height: 1.5;
+  border: 1px solid transparent;
+  white-space: nowrap;
+}
+.keel-chip--asked     { background: #16351f; color: #7ee29b; border-color: #245c37; }
+.keel-chip--extracted { background: #12314a; color: #79c0ff; border-color: #1f4b70; }
+.keel-chip--defaulted { background: #3a2f16; color: #e8c473; border-color: #5c4a24; }
+.keel-chip--skipped   { background: #2a2f36; color: #9aa7b4; border-color: #3c454f; }
+.keel-chip--pending   { background: transparent; color: #8aa0b4; border-color: #3c4b5c; }
+
+/* ---- sidebar progress list ----------------------------------------------- */
+.keel-slot {
+  display: flex; align-items: center; justify-content: space-between;
+  gap: 0.5rem; padding: 0.18rem 0; font-size: 0.85rem;
+}
+.keel-slot span:first-child { color: #c4d0dc; }
+
+/* ---- conflict banner ------------------------------------------------------ */
+.keel-conflict {
+  border: 1px solid #6b4a1e;
+  border-left: 4px solid #d9a441;
+  background: #241c10;
+  border-radius: 8px;
+  padding: 0.8rem 1rem;
+  margin: 0.4rem 0 1rem;
+}
+.keel-conflict h4 { margin: 0 0 0.4rem; font-size: 0.95rem; color: #f0cd8a; }
+.keel-conflict ul { margin: 0; padding-left: 1.1rem; }
+.keel-conflict li { margin: 0.25rem 0; font-size: 0.86rem; color: #e4d9c4; }
+.keel-conflict .keel-res { color: #b9c6d2; }
+.keel-conflict a { color: #e8c473; }
+
+@media (max-width: 640px) {
+  .block-container { padding-left: 0.9rem; padding-right: 0.9rem; }
+  .stApp h1 { font-size: 1.6rem; }
+}

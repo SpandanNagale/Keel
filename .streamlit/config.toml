@@ -1,0 +1,17 @@
+# Committed. Only .streamlit/secrets.toml is gitignored.
+# The palette here does most of the work of not looking like stock Streamlit;
+# assets/style.css handles what the theme block cannot reach.
+
+[theme]
+base = "dark"
+primaryColor = "#5aa9e6"
+backgroundColor = "#0e1620"
+secondaryBackgroundColor = "#182634"
+textColor = "#dce6ef"
+font = "sans serif"
+
+[client]
+toolbarMode = "minimal"
+
+[browser]
+gatherUsageStats = false

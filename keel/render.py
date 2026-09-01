@@ -281,7 +281,10 @@ def _assemble_and_validate(
         if isinstance(raw_val, list):  # some models return a bullet array, not a string
             raw_val = "\n".join(f"- {x}" if not str(x).lstrip().startswith(("-", "*")) else str(x)
                                 for x in raw_val)
-        body = _strip_injected_headings(str(raw_val).strip())
+        raw_val = str(raw_val)
+        if "\\n" in raw_val and "\n" not in raw_val:  # model escaped its newlines
+            raw_val = raw_val.replace("\\n", "\n")
+        body = _strip_injected_headings(raw_val.strip())
         if not body:
             return None, f"synthesis produced no '{key}' section"
         bodies[key] = body

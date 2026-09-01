@@ -99,18 +99,26 @@ test that asserts it.
 ## Architecture
 
 ```
-app.py                 Streamlit UI and flow control only
-keel/models.py         pydantic models
-keel/engine.py         slot state machine, template loading, the capped LLM helper
-keel/render.py         synthesis pass + deterministic fallback -> markdown
-keel/llm.py            the one place an LLM is called; returns (result, error)
-keel/templates/*.yaml  five slot templates
-doctor.py              one-live-call smoke script
+app.py                    Streamlit UI and flow control only
+keel/models.py            pydantic models
+keel/engine.py            slot state machine, template loading, the capped LLM helper
+keel/render.py            synthesis pass + deterministic fallback -> markdown
+keel/llm.py               the one place an LLM is called; returns (result, error)
+keel/session_io.py        session <-> JSON, with a schema-version gate
+keel/templates/*.yaml     five slot templates
+.streamlit/config.toml    dark theme palette
+assets/style.css          the CSS the theme block can't reach (chips, conflict banner)
+doctor.py                 one-live-call smoke script
 tests/
 ```
 
-`keel/engine.py` and `keel/render.py` import and pass their tests without Streamlit
-installed.
+`keel/engine.py`, `keel/render.py`, and `keel/session_io.py` import and pass their tests
+without Streamlit installed.
+
+The result screen renders the spec section by section (each collapsible), shows a conflict
+banner above it when `check_conflicts` found anything, and colour-codes every answer by
+where it came from — the same chips appear in the sidebar progress panel, which tracks each
+slot's state live through the session.
 
 ### LLM integration
 

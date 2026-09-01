@@ -86,15 +86,13 @@ def test_accept_every_default_completes_with_all_sections(monkeypatch):
         _btn(at, "Accept & continue").click()
         at.run()
 
-    md = at.markdown[-1].value if at.markdown else ""
-    combined = "\n".join(m.value for m in at.markdown)
+    raw = next((c.value for c in at.code if c.value.startswith("# ")), "")
     for heading in ("## Context", "## Objective", "## Input / Output contract",
                     "## Constraints", "## Acceptance criteria", "## Non-goals",
                     "## Open questions"):
-        assert heading in combined
+        assert heading in raw  # progressive-reveal expanders + the copy box
     assert at.session_state.session.questions_asked <= 8
-    assert any("# " in c.value and "## Open questions" in c.value for c in at.code)
-    assert combined.count("_Not specified") == 0  # no empty sections
+    assert "_Not specified" not in raw  # no empty sections
     assert not at.exception
 
 
@@ -138,10 +136,10 @@ def test_synthesis_failure_falls_back_to_deterministic_spec(monkeypatch):
     assert at.session_state.session.degraded is True
     assert any("Synthesis unavailable: InternalServerError: synthesis boom" in w.value
                for w in at.warning)
-    combined = "\n".join(m.value for m in at.markdown)
+    raw = next((c.value for c in at.code if c.value.startswith("# ")), "")
     for heading in ("## Context", "## Objective", "## Acceptance criteria", "## Open questions"):
-        assert heading in combined
-    assert "without LLM assistance" in combined
+        assert heading in raw
+    assert "without LLM assistance" in raw
     assert not at.exception
 
 
@@ -295,6 +293,43 @@ def test_session_download_button_is_offered_on_the_result(monkeypatch):
     combined = "\n".join(m.value for m in at.markdown)
     assert "Regenerate spec" in labels
     # the .json download is wired even if this Streamlit's AppTest can't enumerate it
+    assert not at.exception
+
+
+def test_sidebar_shows_live_slot_state(monkeypatch):
+    at = _new_app(monkeypatch, _happy_llm)
+    _start(at)
+    side = "\n".join(m.value for m in at.sidebar.markdown)
+    assert "Error handling" in side                    # a slot label
+    assert "keel-chip" in side                         # rendered as a chip
+    assert "keel-chip--pending" in side                # nothing resolved yet
+    # accept one recommended answer; that slot leaves the pending state
+    _btn(at, "Accept & continue").click()
+    at.run()
+    side = "\n".join(m.value for m in at.sidebar.markdown)
+    assert "keel-chip--defaulted" in side
+
+
+def test_conflict_banner_appears_when_conflicts_are_present(monkeypatch):
+    def with_conflict(system, user, **kw):
+        if _conflict_call(system):
+            return {"conflicts": [{
+                "slots": ["constraints", "objective"],
+                "conflict": "Offline-only cannot serve an AI model.",
+                "suggested_resolution": "Permit a local model or drop the AI claim.",
+            }]}, None
+        return _happy_llm(system, user, **kw)
+
+    at = _new_app(monkeypatch, with_conflict)
+    _start(at)
+    while not at.session_state.session.finished:
+        _btn(at, "Accept & continue").click()
+        at.run()
+
+    blob = "\n".join(m.value for m in at.markdown)
+    assert "keel-conflict" in blob
+    assert "unresolved conflict" in blob
+    assert "Offline-only cannot serve an AI model." in blob
     assert not at.exception
 
 

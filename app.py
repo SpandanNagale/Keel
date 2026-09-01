@@ -13,12 +13,16 @@ without Streamlit. Rules this file obeys:
 """
 from __future__ import annotations
 
+import html
 from datetime import date
+from pathlib import Path
 
 import streamlit as st
 
 from keel import engine, llm, render, session_io
 from keel.render import render_markdown
+
+_ASSETS = Path(__file__).parent / "assets"
 
 # --------------------------------------------------------------------------- #
 # Caps (all configurable here)
@@ -69,6 +73,36 @@ def _shared_provider() -> tuple["llm.Provider | None", str | None]:
 @st.cache_data(show_spinner=False)
 def _load_template(name: str):
     return engine.load_template(name)
+
+
+@st.cache_data(show_spinner=False)
+def _style() -> str:
+    try:
+        return (_ASSETS / "style.css").read_text("utf-8")
+    except OSError:
+        return ""
+
+
+def _inject_css() -> None:
+    css = _style()
+    if css:
+        st.markdown(f"<style>{css}</style>", unsafe_allow_html=True)
+
+
+# source -> (human label, chip modifier). Used identically in the sidebar
+# progress panel and the review step so the colour always means the same thing.
+_SOURCE_META = {
+    "extracted": ("from your idea", "extracted"),
+    "asked": ("you answered", "asked"),
+    "defaulted": ("Keel default", "defaulted"),
+    "skipped": ("skipped", "skipped"),
+    "pending": ("pending", "pending"),
+}
+
+
+def _chip(source: str) -> str:
+    label, mod = _SOURCE_META.get(source, ("pending", "pending"))
+    return f'<span class="keel-chip keel-chip--{mod}">{html.escape(label)}</span>'
 
 
 # --------------------------------------------------------------------------- #
@@ -345,7 +379,30 @@ def _sidebar_byok() -> tuple[str, str]:
             key="byok_provider",
         )
         key = st.text_input("Your API key (optional)", type="password", key="byok")
-        return key, provider
+    return key, provider
+
+
+def _sidebar_slot_panel() -> None:
+    """Live state of every slot — the slot model made visible instead of hidden."""
+    session = st.session_state.session
+    if session is None:
+        return
+    template = _load_template(session.template_name)
+    slots = sorted(template.slots, key=lambda s: (s.priority, s.name))
+    with st.sidebar:
+        st.divider()
+        st.subheader("Progress")
+        rows = []
+        for slot in slots:
+            cur = session.slots.get(slot.name)
+            source = cur.source if cur else "pending"
+            rows.append(
+                f'<div class="keel-slot"><span>{html.escape(slot.label)}</span>'
+                f"{_chip(source)}</div>"
+            )
+        st.markdown("".join(rows), unsafe_allow_html=True)
+        done = sum(1 for s in slots if session.slots.get(s.name))
+        st.caption(f"{done} / {len(slots)} dimensions resolved")
 
 
 def _view_intro(byok: str, byok_provider: str) -> None:
@@ -464,6 +521,45 @@ def _view_questions(byok: str, byok_provider: str) -> None:
     )
 
 
+def _conflict_banner(session) -> None:
+    if not session.conflicts:
+        return
+    items = []
+    for c in session.conflicts:
+        slots = ", ".join(html.escape(s) for s in (c.get("slots") or [])) or "answers"
+        conflict = html.escape(str(c.get("conflict", "")).strip())
+        res = html.escape(str(c.get("suggested_resolution") or "").strip())
+        res_html = f'<br><span class="keel-res">Suggested resolution: {res}</span>' if res else ""
+        items.append(f"<li><strong>{slots}</strong> — {conflict}{res_html}</li>")
+    n = len(session.conflicts)
+    st.markdown(
+        f'<div class="keel-conflict"><h4>{n} unresolved '
+        f'{"conflict" if n == 1 else "conflicts"} in your answers</h4>'
+        f'<ul>{"".join(items)}</ul>'
+        '<a href="#review-edit-answers">Jump to the answers to resolve them &darr;</a></div>',
+        unsafe_allow_html=True,
+    )
+
+
+def _render_spec_sections(md: str) -> None:
+    """Progressive reveal: one collapsible block per section instead of one wall."""
+    lines = md.splitlines()
+    if lines and lines[0].startswith("# "):
+        st.markdown(f"### {lines[0][2:].strip()}")
+        lines = lines[1:]
+    sections: list[tuple[str, list[str]]] = []
+    for ln in lines:
+        if ln.startswith("## "):
+            sections.append((ln[3:].strip(), []))
+        elif ln.strip() == "---":
+            break
+        elif sections:
+            sections[-1][1].append(ln)
+    for heading, body in sections:
+        with st.expander(heading, expanded=True):
+            st.markdown("\n".join(body).strip() or "_(nothing)_")
+
+
 def _view_result(byok: str, byok_provider: str) -> None:
     session = st.session_state.session
 
@@ -484,9 +580,10 @@ def _view_result(byok: str, byok_provider: str) -> None:
             "before handing this to an agent."
         )
 
+    _conflict_banner(session)
+
     slug = engine.slugify(session.title())
     base = f"keel-{slug}-{session.created_date}"
-
     d1, d2 = st.columns(2)
     d1.download_button("Download .md", md, file_name=f"{base}.md",
                        mime="text/markdown", type="primary")
@@ -494,24 +591,16 @@ def _view_result(byok: str, byok_provider: str) -> None:
                        file_name=f"{base}.json", mime="application/json",
                        help="Reload this on the start screen to edit and regenerate later.")
 
-    st.markdown(md)
+    _render_spec_sections(md)
 
-    with st.expander("Raw markdown (select all to copy)"):
-        st.code(md, language="markdown")
+    st.caption("Copy the whole spec from the box below — the copy icon is top-right.")
+    st.code(md, language="markdown")
 
     _review_and_regenerate(byok, byok_provider)
 
     if st.button("Start over", key="startover_r"):
         _reset()
         st.rerun()
-
-
-_SOURCE_LABEL = {
-    "extracted": "from your idea",
-    "asked": "you answered",
-    "defaulted": "Keel default",
-    "skipped": "skipped",
-}
 
 
 def _review_and_regenerate(byok: str, byok_provider: str) -> None:
@@ -525,28 +614,35 @@ def _review_and_regenerate(byok: str, byok_provider: str) -> None:
             cur = session.slots.get(slot.name)
             st.session_state[k] = cur.value if cur else ""
 
-    with st.expander("Review & edit answers, then regenerate"):
-        st.caption(
-            "Every dimension that fed the spec above. Edit any of them and "
-            "regenerate — Keel re-checks for contradictions and rewrites the "
-            "document without asking a single question again."
+    st.subheader("Review & edit answers", anchor="review-edit-answers")
+    st.caption(
+        "Every dimension that fed the spec above. Edit any of them and regenerate — "
+        "Keel re-checks for contradictions and rewrites the document without asking a "
+        "single question again."
+    )
+    st.markdown(
+        " &nbsp; ".join(_chip(s) for s in ("extracted", "asked", "defaulted", "skipped")),
+        unsafe_allow_html=True,
+    )
+    for slot in slots:
+        cur = session.slots.get(slot.name)
+        source = cur.source if cur else "pending"
+        st.markdown(
+            f"**{html.escape(slot.label)}** &nbsp; {_chip(source)}",
+            unsafe_allow_html=True,
         )
-        for slot in slots:
-            cur = session.slots.get(slot.name)
-            tag = _SOURCE_LABEL.get(cur.source, "unset") if cur else "unset"
-            st.text_area(f"{slot.label}  ·  _{tag}_", key=f"edit_{slot.name}", height=80)
+        st.text_area(slot.label, key=f"edit_{slot.name}", height=80,
+                     label_visibility="collapsed")
 
-        left = engine.regenerations_left(session)
-        ok, reason = engine.can_regenerate(session)
-        if st.button("Regenerate spec", key="regen_btn", disabled=not ok):
-            edits = {s.name: st.session_state.get(f"edit_{s.name}", "") for s in slots}
-            _regenerate(edits, byok, byok_provider)
-            st.rerun()
-        st.caption(
-            f"Regenerations left: {left}"
-            if ok
-            else f"Regeneration unavailable — {reason}."
-        )
+    left = engine.regenerations_left(session)
+    ok, reason = engine.can_regenerate(session)
+    if st.button("Regenerate spec", key="regen_btn", type="primary", disabled=not ok):
+        edits = {s.name: st.session_state.get(f"edit_{s.name}", "") for s in slots}
+        _regenerate(edits, byok, byok_provider)
+        st.rerun()
+    st.caption(
+        f"Regenerations left: {left}" if ok else f"Regeneration unavailable — {reason}."
+    )
 
 
 # --------------------------------------------------------------------------- #
@@ -555,9 +651,11 @@ def _review_and_regenerate(byok: str, byok_provider: str) -> None:
 def main() -> None:
     st.set_page_config(page_title="Keel", page_icon="⛵", layout="centered")
     _init_state()
+    _inject_css()
     st.title("⛵ Keel")
 
     byok, byok_provider = _sidebar_byok()
+    _sidebar_slot_panel()
     session = st.session_state.session
 
     if session is None:
