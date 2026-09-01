@@ -27,9 +27,10 @@ from keel.models import SessionState, SlotDef, SlotValue, Template
 
 # Hard cap: a single session may make at most this many LLM calls. The next one
 # is refused with an error rather than made. Raised from 10 for Phase 2: a
-# "thorough" session can now spend extract(1) + asked(8) + context-defaults(1) +
-# check_conflicts(1) + synthesis(1) = 12, and the ceiling keeps headroom.
-MAX_LLM_CALLS_PER_SESSION = 14
+# "thorough" session spends extract(1) + asked(8) + context-defaults(1) +
+# check_conflicts(1) + synthesis(1) = 12; Phase 3 adds up to MAX_REGENERATIONS
+# regenerations at two calls each, so the ceiling is 14 + 6 = 20.
+MAX_LLM_CALLS_PER_SESSION = 20
 
 # Never ask more than this many questions in one session, regardless of how many
 # slots the template (and depth) put in play. Slots past this are defaulted from
@@ -39,6 +40,11 @@ MAX_ASKED_QUESTIONS = 8
 # Depth -> how many of the optional (required=false) slots to ASK about, in
 # priority order. The rest are still filled, just not asked.
 DEPTH_OPTIONAL = {"quick": 0, "standard": 2, "thorough": 3}
+
+# How many times a finished spec may be regenerated from edited answers. Each
+# regeneration costs two calls (conflict check + synthesis); the per-session cap
+# above carries the headroom (14 base + 3 * 2).
+MAX_REGENERATIONS = 3
 
 # Opening ideas longer than this are rejected before any call is made.
 MAX_PROMPT_CHARS = 500
@@ -299,6 +305,46 @@ def fill_unasked_slots(
 # --------------------------------------------------------------------------- #
 # LLM call sites
 # --------------------------------------------------------------------------- #
+def apply_answer_edits(
+    session: SessionState, edits: dict[str, str], template: Template
+) -> int:
+    """Overwrite slot values from the review step. A value that changed is marked
+    ``source="asked"`` (the developer stands behind it now); an emptied value
+    becomes a skip. Returns how many slots actually changed."""
+    changed = 0
+    for name, raw in edits.items():
+        slot = template.slot(name)
+        if slot is None:
+            continue
+        new = raw.strip()
+        current = session.slots.get(name)
+        old = current.value.strip() if current else None
+        if new == old:
+            continue
+        if not new:
+            session.slots[name] = SlotValue(value="", source="skipped")
+        else:
+            session.slots[name] = SlotValue(value=new, source="asked")
+        changed += 1
+    return changed
+
+
+def can_regenerate(session: SessionState) -> tuple[bool, str | None]:
+    """Whether another regeneration is allowed. Two calls are needed (conflict
+    check + synthesis)."""
+    if session.regen_count >= MAX_REGENERATIONS:
+        return False, f"regeneration limit reached ({MAX_REGENERATIONS})"
+    if session.call_count + 2 > MAX_LLM_CALLS_PER_SESSION:
+        return False, "not enough of this session's LLM-call budget left to regenerate"
+    return True, None
+
+
+def regenerations_left(session: SessionState) -> int:
+    by_count = MAX_REGENERATIONS - session.regen_count
+    by_budget = max((MAX_LLM_CALLS_PER_SESSION - session.call_count) // 2, 0)
+    return max(min(by_count, by_budget), 0)
+
+
 def capped_complete_json(
     session: SessionState,
     system: str,

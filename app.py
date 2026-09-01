@@ -17,7 +17,7 @@ from datetime import date
 
 import streamlit as st
 
-from keel import engine, llm, render
+from keel import engine, llm, render, session_io
 from keel.render import render_markdown
 
 # --------------------------------------------------------------------------- #
@@ -78,7 +78,7 @@ def _init_state() -> None:
     if "session" not in st.session_state:
         st.session_state.session = None      # keel.models.SessionState | None
         st.session_state.pending_q = None    # {slot, question, recommended, error}
-        st.session_state.start_error = None  # extraction error banner
+        st.session_state.start_error = None  # extraction / upload error banner
         st.session_state.final_md = None     # synthesized (or fallback) document
         st.session_state.synth_error = None  # synthesis failure reason, if any
 
@@ -180,19 +180,23 @@ def _finalize(byok: str, byok_provider: str) -> None:
         return
     template = _load_template(session.template_name)
 
+    needs_fill = any(session.slots.get(s.name) is None for s in template.slots)
+
     provider, is_shared, blocking = _provider_for_call(byok, byok_provider)
     if blocking is not None:
         session.degraded = True
         st.session_state.synth_error = blocking
-        engine.fill_unasked_slots(session, template, provider=None)  # static
+        if needs_fill:
+            engine.fill_unasked_slots(session, template, provider=None)  # static
         st.session_state.final_md = render_markdown(session)
         return
 
     # Slots that depth or the asked-question cap left unasked are filled here,
     # from the accumulated answers — one call for all of them, never re-asked.
-    if is_shared:
-        _record_shared_call()
-    engine.fill_unasked_slots(session, template, provider=provider)
+    if needs_fill:
+        if is_shared:
+            _record_shared_call()
+        engine.fill_unasked_slots(session, template, provider=provider)
 
     # Contradiction check first, as its own call — a model already committed to
     # writing a coherent document is motivated not to notice the inputs cannot be
@@ -254,12 +258,64 @@ def _finish_with_defaults(byok: str, byok_provider: str) -> None:
     _finalize(byok, byok_provider)
 
 
+def _load_session(raw: bytes) -> None:
+    """Restore a downloaded session and jump straight to the review step."""
+    try:
+        text = raw.decode("utf-8")
+    except UnicodeDecodeError:
+        st.session_state.start_error = "That file is not a readable text/JSON file."
+        return
+    session, error = session_io.loads(text)
+    if error is not None:
+        st.session_state.start_error = error
+        return
+    try:
+        _load_template(session.template_name)
+    except Exception:
+        st.session_state.start_error = (
+            f"The session names an unknown template ({session.template_name!r})."
+        )
+        return
+    session.finished = True
+    st.session_state.session = session
+    st.session_state.pending_q = None
+    st.session_state.start_error = None
+    st.session_state.final_md = None
+    st.session_state.synth_error = None
+
+
+def _regenerate(edits: dict[str, str], byok: str, byok_provider: str) -> None:
+    """Review step: apply the edited answers, then re-run the conflict check and
+    synthesis only — questions are never re-asked."""
+    session = st.session_state.session
+    if not session:
+        return
+    ok, reason = engine.can_regenerate(session)
+    if not ok:
+        st.session_state.synth_error = reason
+        return
+    template = _load_template(session.template_name)
+    engine.apply_answer_edits(session, edits, template)
+    session.regen_count += 1
+    session.conflicts = []
+    session.conflict_check_error = None
+    st.session_state.final_md = None
+    st.session_state.synth_error = None
+    _finalize(byok, byok_provider)
+
+
+def _clear_edit_widgets() -> None:
+    for k in [k for k in st.session_state if k.startswith("edit_")]:
+        del st.session_state[k]
+
+
 def _reset() -> None:
     st.session_state.session = None
     st.session_state.pending_q = None
     st.session_state.start_error = None
     st.session_state.final_md = None
     st.session_state.synth_error = None
+    _clear_edit_widgets()
 
 
 # --------------------------------------------------------------------------- #
@@ -339,11 +395,24 @@ def _view_intro(byok: str, byok_provider: str) -> None:
         )
 
     if st.button("Start", type="primary", key="start_btn", disabled=not prompt.strip()):
+        _clear_edit_widgets()
         _start(prompt, choice, depth, byok, byok_provider)
         st.rerun()
 
     if st.session_state.start_error:
         st.warning(st.session_state.start_error)
+
+    with st.expander("Resume a saved session"):
+        st.caption(
+            "Upload a `.json` file downloaded from a previous run to jump straight "
+            "to the review step — no questions to answer again."
+        )
+        up = st.file_uploader("Session file", type=["json"], key="session_upload",
+                              label_visibility="collapsed")
+        if st.button("Load session", key="load_session_btn", disabled=up is None):
+            _clear_edit_widgets()
+            _load_session(up.getvalue())
+            st.rerun()
 
 
 def _view_questions(byok: str, byok_provider: str) -> None:
@@ -416,17 +485,68 @@ def _view_result(byok: str, byok_provider: str) -> None:
         )
 
     slug = engine.slugify(session.title())
-    fname = f"keel-{slug}-{session.created_date}.md"
+    base = f"keel-{slug}-{session.created_date}"
 
-    st.download_button("Download .md", md, file_name=fname, type="primary")
+    d1, d2 = st.columns(2)
+    d1.download_button("Download .md", md, file_name=f"{base}.md",
+                       mime="text/markdown", type="primary")
+    d2.download_button("Download session (.json)", session_io.dumps(session),
+                       file_name=f"{base}.json", mime="application/json",
+                       help="Reload this on the start screen to edit and regenerate later.")
+
     st.markdown(md)
 
     with st.expander("Raw markdown (select all to copy)"):
         st.code(md, language="markdown")
 
+    _review_and_regenerate(byok, byok_provider)
+
     if st.button("Start over", key="startover_r"):
         _reset()
         st.rerun()
+
+
+_SOURCE_LABEL = {
+    "extracted": "from your idea",
+    "asked": "you answered",
+    "defaulted": "Keel default",
+    "skipped": "skipped",
+}
+
+
+def _review_and_regenerate(byok: str, byok_provider: str) -> None:
+    session = st.session_state.session
+    template = _load_template(session.template_name)
+    slots = sorted(template.slots, key=lambda s: (s.priority, s.name))
+
+    for slot in slots:  # seed each editor once; the user's edits then persist
+        k = f"edit_{slot.name}"
+        if k not in st.session_state:
+            cur = session.slots.get(slot.name)
+            st.session_state[k] = cur.value if cur else ""
+
+    with st.expander("Review & edit answers, then regenerate"):
+        st.caption(
+            "Every dimension that fed the spec above. Edit any of them and "
+            "regenerate — Keel re-checks for contradictions and rewrites the "
+            "document without asking a single question again."
+        )
+        for slot in slots:
+            cur = session.slots.get(slot.name)
+            tag = _SOURCE_LABEL.get(cur.source, "unset") if cur else "unset"
+            st.text_area(f"{slot.label}  ·  _{tag}_", key=f"edit_{slot.name}", height=80)
+
+        left = engine.regenerations_left(session)
+        ok, reason = engine.can_regenerate(session)
+        if st.button("Regenerate spec", key="regen_btn", disabled=not ok):
+            edits = {s.name: st.session_state.get(f"edit_{s.name}", "") for s in slots}
+            _regenerate(edits, byok, byok_provider)
+            st.rerun()
+        st.caption(
+            f"Regenerations left: {left}"
+            if ok
+            else f"Regeneration unavailable — {reason}."
+        )
 
 
 # --------------------------------------------------------------------------- #

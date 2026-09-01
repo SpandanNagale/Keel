@@ -3,7 +3,7 @@ from __future__ import annotations
 import pytest
 
 from keel import engine, llm
-from keel.models import Section
+from keel.models import Section, SlotValue
 
 _PROVIDER = llm.Provider("groq", "test-key", "openai/gpt-oss-120b")
 
@@ -261,6 +261,49 @@ def test_session_call_cap_refuses_the_eleventh_call(make_session, stub_llm):
     assert "limit reached" in err
     assert session.call_count == engine.MAX_LLM_CALLS_PER_SESSION  # not incremented
     assert session.degraded is True
+
+
+# --------------------------------------------------------------------------- #
+# Phase 3: review-step edits and regeneration budget
+# --------------------------------------------------------------------------- #
+def test_apply_answer_edits_marks_changes_and_empties_as_skips(make_session):
+    session = make_session()
+    template = engine.load_template("default")
+    session.slots = {
+        "scale": SlotValue(value="small", source="defaulted"),
+        "runtime": SlotValue(value="a local script", source="asked"),
+        "done": SlotValue(value="it runs", source="defaulted"),
+    }
+    changed = engine.apply_answer_edits(
+        session,
+        {"scale": "about 5000 rows", "runtime": "a local script", "done": "  ",
+         "not_a_slot": "ignored"},
+        template,
+    )
+    assert changed == 2
+    assert session.slots["scale"].value == "about 5000 rows"
+    assert session.slots["scale"].source == "asked"          # edited -> stands behind it
+    assert session.slots["runtime"].source == "asked"        # unchanged -> untouched
+    assert session.slots["done"].source == "skipped"         # emptied -> skip
+    assert session.slots["done"].value == ""
+
+
+def test_regeneration_budget_respects_both_the_count_and_the_call_cap(make_session):
+    session = make_session()
+
+    session.regen_count = engine.MAX_REGENERATIONS
+    ok, why = engine.can_regenerate(session)
+    assert ok is False and "regeneration limit" in why
+
+    session.regen_count = 0
+    session.call_count = engine.MAX_LLM_CALLS_PER_SESSION - 1  # only 1 call left, need 2
+    ok, why = engine.can_regenerate(session)
+    assert ok is False and "budget" in why
+    assert engine.regenerations_left(session) == 0
+
+    session.call_count = engine.MAX_LLM_CALLS_PER_SESSION - 4
+    assert engine.regenerations_left(session) == 2
+    assert engine.can_regenerate(session)[0] is True
 
 
 # --------------------------------------------------------------------------- #

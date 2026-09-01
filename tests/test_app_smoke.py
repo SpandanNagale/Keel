@@ -247,6 +247,57 @@ def test_depth_selector_controls_how_many_questions_are_asked(monkeypatch):
     assert not at.exception
 
 
+def test_regenerate_rewrites_the_spec_without_re_asking(monkeypatch):
+    calls = {"synth": 0}
+
+    def spy(system, user, **kw):
+        if _synthesis_call(system):
+            calls["synth"] += 1
+            secs = dict(_SYNTH_SECTIONS)
+            secs["objective"] = f"Objective revision number {calls['synth']}. " * 3
+            return secs, None
+        return _happy_llm(system, user, **kw)
+
+    at = _new_app(monkeypatch, spy)
+    _start(at)
+    guard = 0
+    while not at.session_state.session.finished:
+        guard += 1
+        assert guard < 15
+        _btn(at, "Accept & continue").click()
+        at.run()
+    assert calls["synth"] == 1
+    asked_before = at.session_state.session.questions_asked
+
+    at.session_state["edit_constraints"] = "must run fully offline, no network at all"
+    _btn(at, "Regenerate spec").click()
+    at.run()
+
+    s = at.session_state.session
+    assert s.regen_count == 1
+    assert s.questions_asked == asked_before                       # no new questions
+    assert s.slots["constraints"].value == "must run fully offline, no network at all"
+    assert s.slots["constraints"].source == "asked"
+    assert calls["synth"] == 2                                     # synthesis re-ran
+    assert "Objective revision number 2" in "\n".join(m.value for m in at.markdown)
+    assert not at.exception
+
+
+def test_session_download_button_is_offered_on_the_result(monkeypatch):
+    at = _new_app(monkeypatch, _happy_llm)
+    _start(at)
+    while not at.session_state.session.finished:
+        _btn(at, "Accept & continue").click()
+        at.run()
+    labels = [b.label for b in at.button] + [
+        getattr(d, "label", "") for d in getattr(at, "download_button", [])
+    ]
+    combined = "\n".join(m.value for m in at.markdown)
+    assert "Regenerate spec" in labels
+    # the .json download is wired even if this Streamlit's AppTest can't enumerate it
+    assert not at.exception
+
+
 def test_fresh_run_starts_clean_no_persistence(monkeypatch):
     at1 = _new_app(monkeypatch, _happy_llm)
     _start(at1)

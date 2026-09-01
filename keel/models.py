@@ -85,6 +85,9 @@ class SessionState(BaseModel):
     call_count: int = 0
     degraded: bool = False
     finished: bool = False
+    # How many times the spec has been regenerated from edited answers (review
+    # step). Capped; see engine.MAX_REGENERATIONS.
+    regen_count: int = 0
     # Contradictions found by the pre-synthesis check_conflicts pass. Each entry:
     # {"slots": [...], "conflict": "...", "suggested_resolution": "..."}. Written
     # into "Open questions" mechanically by render.py, never by the synthesis model.

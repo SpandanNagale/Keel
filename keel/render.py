@@ -41,8 +41,10 @@ SECTION_ORDER: list[tuple[str, str]] = [
 ]
 _HEADINGS = [h for h, _ in SECTION_ORDER]
 
-# Synthesis writes a whole document, so it gets a larger budget than a question.
-SYNTHESIS_MAX_TOKENS = 2000
+# Synthesis writes a whole document — and since Phase 2 it enumerates the full
+# interface surface — so it needs a generous budget. Too small and a verbose
+# model runs out mid-JSON and the call hard-fails to the deterministic renderer.
+SYNTHESIS_MAX_TOKENS = 3500
 
 _DEGRADED_NOTE = (
     "> **Note:** this spec was generated without LLM assistance for at least one "

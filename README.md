@@ -150,15 +150,32 @@ note. That renderer stays fully functional with no LLM available.
 
 | Cap | Value | Where |
 |---|---|---|
-| LLM calls per session | 14 | `keel/engine.py` |
+| LLM calls per session | 20 | `keel/engine.py` |
 | Questions asked per session | 8 | `keel/engine.py` |
+| Regenerations per session | 3 | `keel/engine.py` |
 | Output tokens — question | 800 | `keel/llm.py` |
-| Output tokens — synthesis | 2000 | `keel/render.py` |
+| Output tokens — synthesis | 3500 | `keel/render.py` |
 | Shared-key calls per day | 500 | `app.py` |
 | Opening prompt length | 500 chars | `keel/engine.py` |
 
 Past the daily ceiling the shared key is disabled and users are directed to supply their
 own via the sidebar **API key** field (used for that session only, never stored).
+
+## Save, edit, regenerate
+
+The result screen offers **Download session (.json)** next to Download .md. The file holds
+the whole session — prompt, template, depth, every answer with its `source`, the conflict
+list, the call count, and a `schema_version` — and nothing else; Keel never stores a session
+server-side. **Resume a saved session** on the start screen loads one back and drops you at
+the review step (a file from a newer Keel is refused with a clear message rather than
+half-read).
+
+The review step lists every dimension that fed the spec, each editable, tagged with where
+it came from (`from your idea` / `you answered` / `Keel default` / `skipped`). **Regenerate
+spec** re-runs the conflict check and synthesis from the edited answers — no question is ever
+re-asked. Each regeneration costs two calls and is capped (`engine.MAX_REGENERATIONS`); the
+UI shows how many are left. `keel/session_io.py` owns the format; it imports and tests
+without Streamlit.
 
 ## Deploy to Streamlit Community Cloud
 
