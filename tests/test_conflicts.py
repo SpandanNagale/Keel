@@ -14,7 +14,7 @@ from keel import engine, llm, render
 from keel.models import SlotValue
 
 PROV = llm.Provider("groq", "k", "m")
-_SENTINEL = "- None — every required dimension was addressed."
+_SENTINEL = "- None — every dimension was addressed."
 
 _SECTIONS = {
     "context": "A personal tool for one person and their own data.",

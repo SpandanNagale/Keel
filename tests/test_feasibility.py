@@ -19,7 +19,7 @@ _CORE = {
     "acceptance_criteria": "- A staff member can filter a report\n- A note is saved and shown\n"
                            "- Reloading shows the saved note",
     "non_goals": "- No mobile app\n- No public access\n- No spreadsheet export",
-    "open_questions": "- None — every required dimension was addressed.",
+    "open_questions": "- None — every dimension was addressed.",
 }
 
 

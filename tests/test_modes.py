@@ -18,7 +18,7 @@ _SECTIONS = {
     "acceptance_criteria": "- One run produces the output\n- Every item is represented\n"
                            "- The output opens cleanly",
     "non_goals": "- No web UI\n- No database\n- No accounts",
-    "open_questions": "- None — every required dimension was addressed.",
+    "open_questions": "- None — every dimension was addressed.",
 }
 
 

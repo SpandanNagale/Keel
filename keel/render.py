@@ -96,7 +96,14 @@ _CEILING_NOTE = (
 
 # The one string "Open questions" is allowed to be, and only when there is
 # genuinely nothing to raise (no conflicts, no skipped slots, no failed checks).
-_SENTINEL_LINE = "- None — every required dimension was addressed."
+_SENTINEL_LINE = "- None — every dimension was addressed."
+
+# The subsection titles, in render order, for the restructured "Open questions".
+_OQ_SUBSECTIONS = (
+    "Unresolved conflicts",
+    "Not specified",
+    "Worth deciding before starting",
+)
 
 
 # --------------------------------------------------------------------------- #
@@ -168,10 +175,16 @@ How to write it:
   Never state an authentication algorithm, hashing scheme, iteration count, or token lifetime \
   the developer did not supply — record the policy ("password login with server-side sessions") \
   and leave the parameters to implementation.
+- "non_goals": a markdown bullet list, at most 8 items, each naming a concrete thing an \
+  agent could otherwise build unprompted and should NOT (accounts, a settings system, a \
+  plugin architecture, packaging, a broad test suite). Order by how likely an agent is to \
+  build it unprompted. Reject hedges — "not a focus", "beyond basic", "kept minimal", "for \
+  the demo" are not non-goals; if a capability is actually in scope it belongs in the \
+  objective, not a softened non-goal.
 - "open_questions": a markdown bullet list of dimensions the developer genuinely left \
   unspecified. Do NOT put contradictions here — they are detected and recorded separately. \
   If there is genuinely nothing open, write exactly: \
-  "- None — every required dimension was addressed."
+  "- None — every dimension was addressed."
 """
 
 
@@ -392,22 +405,25 @@ def _assemble_and_validate(
     # rewrite becomes an "Open questions" note.
     bodies, figure_notes = _scrub_unsupported_figures(bodies, _slot_number_blob(session))
 
-    # "Open questions" is rebuilt here, in Python: the surviving conflict list,
-    # plus deterministic checks the model does not run (fabricated numbers,
-    # criteria that restate constraints, missing sensitive-domain disclaimer).
-    # The model never decides whether a conflict is reported.
-    bodies["open_questions"] = _build_open_questions(
-        session, template, bodies, extra_notes=figure_notes
-    )
+    # B6: every non-goal must name something an agent could concretely refrain
+    # from building — drop hedges, cap at eight.
+    bodies["non_goals"] = _tighten_non_goals(bodies["non_goals"])
 
-    # Hardcoded-secret scan + scrub.
+    # Hardcoded-secret scan + scrub of the model-written sections (the "Open
+    # questions" body is built after this from already-scrubbed inputs).
     scrubbed = False
-    for key, body in bodies.items():
-        cleaned, hit = _scrub_secrets(body)
+    for key in list(bodies):
+        cleaned, hit = _scrub_secrets(bodies[key])
         bodies[key] = cleaned
         scrubbed = scrubbed or hit
-    if scrubbed:
-        bodies["open_questions"] = bodies["open_questions"].rstrip() + "\n" + _SCRUB_NOTE
+
+    # "Open questions" is rebuilt here, in Python, in three labelled subsections:
+    # surviving conflicts, deliberately-skipped slots, and synthesis-identified
+    # gaps (including the B4 figure rewrites). The model never decides whether a
+    # conflict is reported.
+    bodies["open_questions"] = _build_open_questions(
+        session, template, bodies, extra_notes=figure_notes, secret_scrubbed=scrubbed
+    )
 
     # No template instruction text may survive into the document.
     for slot in template.slots:
@@ -906,49 +922,113 @@ def _reference_bullet(session: SessionState) -> list[str]:
     ]
 
 
+def _is_sentinel(line: str) -> bool:
+    low = line.lower()
+    return (
+        "none" in low
+        and "every" in low
+        and "dimension" in low
+        and ("addressed" in low or "specified" in low)
+    )
+
+
+def _assemble_open_questions(
+    unresolved: list[str], not_specified: list[str], worth_deciding: list[str]
+) -> str:
+    """Render "Open questions" as up to three labelled subsections, each omitted
+    when empty. If all three are empty the section is exactly the sentinel — and
+    a test asserts that never happens next to a non-empty conflict list."""
+    groups = [
+        (_OQ_SUBSECTIONS[0], unresolved),
+        (_OQ_SUBSECTIONS[1], not_specified),
+        (_OQ_SUBSECTIONS[2], worth_deciding),
+    ]
+    parts: list[str] = []
+    for title, lines in groups:
+        clean = [ln for ln in lines if ln.strip()]
+        if not clean:
+            continue
+        parts.append(f"**{title}**\n\n" + "\n".join(clean))
+    if not parts:
+        return _SENTINEL_LINE
+    return "\n\n".join(parts)
+
+
 def _build_open_questions(
     session: SessionState,
     template: Template,
     bodies: dict[str, str],
     *,
     extra_notes: list[str] | None = None,
+    secret_scrubbed: bool = False,
 ) -> str:
-    """Rebuild the "Open questions" body deterministically from the model's draft
-    plus everything Python is responsible for. The sole-"None" sentinel survives
-    only when there is genuinely nothing to raise."""
-    additions: list[str] = []
-    additions += _conflict_bullets(session.conflicts)
-    additions += _conflict_unavailable_bullet(session.conflict_check_error)
-    additions += _reference_bullet(session)
-    additions += list(extra_notes or [])
-    additions += _unverified_figure_bullets(
+    """Rebuild "Open questions" from the model's draft plus everything Python is
+    responsible for, grouped into three labelled subsections (B5). ``keel_decided``
+    slots never appear here — they have their own section."""
+    # 1. Unresolved conflicts — survivors of post-synthesis re-validation.
+    unresolved = _conflict_bullets(session.conflicts)
+    unresolved += _conflict_unavailable_bullet(session.conflict_check_error)
+
+    # 2. Not specified — slots the user deliberately skipped.
+    not_specified = _skipped_slot_bullets(session, template)
+
+    # 3. Worth deciding before starting — synthesis-identified gaps and the
+    #    deterministic checks that ride alongside.
+    worth = [
+        ln for ln in bodies.get("open_questions", "").splitlines()
+        if ln.strip() and not _is_sentinel(ln)
+    ]
+    worth += list(extra_notes or [])
+    worth += _unverified_figure_bullets(
         bodies.get("acceptance_criteria", ""), _slot_number_blob(session)
     )
-    additions += _restatement_bullets(
+    worth += _restatement_bullets(
         bodies.get("acceptance_criteria", ""),
         bodies.get("non_goals", ""),
         bodies.get("constraints", ""),
     )
     sd = _sensitive_domain_bullet(session, bodies)
     if sd:
-        additions.append(sd)
+        worth.append(sd)
+    worth += _reference_bullet(session)
+    if secret_scrubbed:
+        worth.append(_SCRUB_NOTE)
 
-    must_expand = bool(
-        session.conflicts
-        or session.conflict_check_error
-        or session.skipped_slots()
-        or additions
-    )
-    model_lines = [ln for ln in bodies.get("open_questions", "").splitlines() if ln.strip()]
-    if must_expand:
-        model_lines = [ln for ln in model_lines if _SENTINEL_LINE not in ln]
-        if not model_lines:
-            model_lines = _skipped_slot_bullets(session, template)
+    return _assemble_open_questions(unresolved, not_specified, worth)
 
-    final = model_lines + additions
-    if not final:
-        final = [_SENTINEL_LINE]
-    return "\n".join(final).strip()
+
+# --------------------------------------------------------------------------- #
+# B6: every non-goal must name something an agent could concretely NOT build
+# --------------------------------------------------------------------------- #
+_HEDGE_RE = re.compile(
+    r"not a focus|beyond basic|beyond simple|kept minimal|keep .* minimal|for the (?:purpose "
+    r"of the )?demo|for demo purposes|to some extent|light[- ]touch|nothing fancy|"
+    r"where practical|as needed|for now\b|only basic|basic \w+ only|minimal \w+ only",
+    re.I,
+)
+_MAX_NON_GOALS = 8
+
+
+def _tighten_non_goals(body: str) -> str:
+    """Drop any non-goal that hedges instead of naming a concrete thing to skip,
+    and cap the list at eight. Falls back to the untouched body if that would
+    leave nothing (the section must not be empty)."""
+    kept: list[str] = []
+    bullets = 0
+    for ln in body.splitlines():
+        stripped = ln.strip()
+        if not stripped:
+            continue
+        if _HEDGE_RE.search(stripped):
+            continue
+        is_bullet = stripped[:1] in "-*•"
+        if is_bullet:
+            bullets += 1
+            if bullets > _MAX_NON_GOALS:
+                continue
+        kept.append(ln)
+    result = "\n".join(kept).strip()
+    return result or body.strip()
 
 
 _SECRET_PATTERNS: list[re.Pattern] = [
@@ -1062,24 +1142,23 @@ def render_markdown(session: SessionState) -> str:
     non_goal_pairs = _resolved(session, _section_slot_names(template, "non_goals"))
     if non_goal_pairs:
         for _, value in non_goal_pairs:
-            lines += [value, ""]
+            lines += [_tighten_non_goals(value), ""]
     else:
         lines += ["_Not specified — see Open questions below._", ""]
 
     lines += ["## Open questions", ""]
-    oq: list[str] = _skipped_slot_bullets(session, template)
-    oq += _conflict_bullets(session.conflicts)
-    oq += _conflict_unavailable_bullet(session.conflict_check_error)
-    oq += _reference_bullet(session)
+    unresolved = _conflict_bullets(session.conflicts)
+    unresolved += _conflict_unavailable_bullet(session.conflict_check_error)
+    worth = list(_reference_bullet(session))
     sd = _sensitive_domain_bullet(
         session,
         {"blob": " ".join(v.value for v in session.slots.values() if v.value)},
     )
     if sd:
-        oq.append(sd)
-    if not oq:
-        oq = [_SENTINEL_LINE]
-    lines += oq
+        worth.append(sd)
+    lines += _assemble_open_questions(
+        unresolved, _skipped_slot_bullets(session, template), worth
+    ).splitlines()
     if session.degraded:
         lines += ["", _DEGRADED_NOTE]
     lines.append("")

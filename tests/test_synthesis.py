@@ -38,7 +38,7 @@ _FULL_SECTIONS = {
                            "- Cluster labels are human-readable\n"
                            "- Re-running on the same input is stable",
     "non_goals": "- No browser extension\n- No live sync\n- No web UI\n- No database",
-    "open_questions": "- None — every required dimension was addressed.",
+    "open_questions": "- None — every dimension was addressed.",
 }
 
 
@@ -165,7 +165,7 @@ def test_qualitative_answers_yield_a_digit_free_body(monkeypatch):
         "acceptance_criteria": "- It runs without error\n- The index lists every note\n"
                                "- Opening the index shows readable titles",
         "non_goals": "- No sync\n- No editor\n- No tagging UI",
-        "open_questions": "- None — every required dimension was addressed.",
+        "open_questions": "- None — every dimension was addressed.",
     }
     _stub(monkeypatch, qualitative)
     md, err = render.synthesize_spec(

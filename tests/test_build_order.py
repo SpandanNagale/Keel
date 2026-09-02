@@ -22,7 +22,7 @@ _CORE = {
     "acceptance_criteria": "- A guest can complete a booking end to end\n"
                            "- A double-booking is rejected\n- Reloading shows saved state",
     "non_goals": "- No payments\n- No channel-manager sync\n- No housekeeping module",
-    "open_questions": "- None — every required dimension was addressed.",
+    "open_questions": "- None — every dimension was addressed.",
 }
 _WITH_SECTIONS = dict(
     _CORE,

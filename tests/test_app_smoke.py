@@ -41,7 +41,7 @@ _SYNTH_SECTIONS = {
                            "- Record counts roughly match the input\n"
                            "- Spot-checked records look correct",
     "non_goals": "- No scheduler\n- No database\n- No dashboard",
-    "open_questions": "- None — every required dimension was addressed.",
+    "open_questions": "- None — every dimension was addressed.",
 }
 
 

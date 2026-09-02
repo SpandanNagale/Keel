@@ -222,9 +222,20 @@ merely restate a constraint or non-goal, and a missing disclaimer in a
 health/legal/financial spec. **Every numeric literal in the rendered document must trace
 to an answer** (verbatim or a plain arithmetic derivation of one); a capacity, throughput,
 or volume figure that does not is rewritten qualitatively and listed under *Open
-questions*. Any structural failure falls back
-to the deterministic one-value-per-line renderer, with a visible warning and the degraded
-note (`synthesis_failed` is set). That renderer stays fully functional with no LLM available.
+questions*. **Non-goals** are tightened — any bullet that hedges ("not a focus", "beyond
+basic", "kept minimal") is dropped and the list is capped at eight. Any structural failure
+falls back to the deterministic one-value-per-line renderer, with a visible warning and
+the degraded note (`synthesis_failed` is set). That renderer stays fully functional with
+no LLM available.
+
+*Open questions* is rebuilt in Python as up to three labelled subsections, each omitted
+when empty: **Unresolved conflicts** (survivors of re-validation, plus a
+check-unavailable note), **Not specified** (slots the user deliberately skipped), and
+**Worth deciding before starting** (synthesis-identified gaps, the numeric rewrites, the
+restatement and sensitive-domain flags). `keel_decided` slots never appear here — they
+own the *Decisions* section. When all three subsections are empty the section reads
+"None — every dimension was addressed", and a test asserts that line never renders beside
+a non-empty conflict list.
 
 ### Caps (all constants)
 

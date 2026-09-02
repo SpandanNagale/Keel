@@ -77,7 +77,7 @@ def test_degraded_session_carries_the_no_llm_note_in_open_questions():
 def test_open_questions_present_even_when_nothing_skipped():
     md = render_markdown(_session_all_defaulted("default"))
     oq_block = md.split("## Open questions\n", 1)[1]
-    assert "None — every required dimension" in oq_block
+    assert "None — every dimension" in oq_block
 
 
 def test_title_derives_from_prompt_and_is_trimmed():
