@@ -199,17 +199,53 @@ def askable_slots(session: SessionState, template: Template) -> list[SlotDef]:
     Guided mode asks only the required (core) slots and ignores the depth
     selector entirely — everything else is defaulted, and the closed-answer
     ones become ``keel_decided``. Technical mode keeps the depth-driven set:
-    the required slots plus the first N optional slots by priority."""
-    if session.mode == "guided":
-        return template.required_slots()
+    the required slots plus the first N optional slots by priority.
 
-    n_optional = DEPTH_OPTIONAL.get(session.depth, DEPTH_OPTIONAL["standard"])
-    optional = sorted(
-        (s for s in template.slots if not s.required),
-        key=lambda s: (s.priority, s.name),
-    )
-    chosen = list(template.required_slots()) + optional[:n_optional]
+    A slot suppressed by :func:`slot_suppressed` (currently ``auth_model`` when
+    the non-goals already exclude authentication) is dropped from the list."""
+    if session.mode == "guided":
+        chosen = template.required_slots()
+    else:
+        n_optional = DEPTH_OPTIONAL.get(session.depth, DEPTH_OPTIONAL["standard"])
+        optional = sorted(
+            (s for s in template.slots if not s.required),
+            key=lambda s: (s.priority, s.name),
+        )
+        chosen = list(template.required_slots()) + optional[:n_optional]
+    chosen = [s for s in chosen if not slot_suppressed(s, session)]
     return sorted(chosen, key=lambda s: (s.priority, s.name))
+
+
+# non-goals phrasings that mean "no authentication in this build" — used by
+# ``slot_suppressed`` to drop the auth_model question when it is moot.
+_AUTH_EXCLUDED_RE = re.compile(
+    r"\bno\s+(?:user\s+)?(?:accounts?\s+(?:or|and|,)\s+)?auth\w*"
+    r"|\bno\s+(?:user\s+)?(?:login|accounts?)\b"
+    r"|\bwithout\s+auth\w*"
+    r"|\bauth\w*[^.]{0,40}\b(?:non-?goal|out of scope|not (?:in scope|needed|required))",
+    re.I,
+)
+
+
+def slot_suppressed(slot: SlotDef, session: SessionState) -> bool:
+    """Whether a slot should be dropped entirely for this session — not asked,
+    not defaulted, not rendered. Driven by the slot's ``skip_if``. Currently the
+    only rule: ``auth_model`` is suppressed when the ``non_goals`` answer already
+    rules authentication out, so Keel does not ask about a login it was just told
+    not to build."""
+    if not slot.skip_if:
+        return False
+    if slot.name == "auth_model":
+        ng = session.slots.get("non_goals")
+        return bool(ng and ng.value and _AUTH_EXCLUDED_RE.search(ng.value))
+    return False
+
+
+def visible_slots(session: SessionState, template: Template) -> list[SlotDef]:
+    """Every slot in play for this session's output — all template slots minus
+    the suppressed ones. Render and the sidebar iterate this, not
+    ``template.slots``, so a suppressed slot never shows as pending or skipped."""
+    return [s for s in template.slots if not slot_suppressed(s, session)]
 
 
 def freeze_pending(session: SessionState, template: Template) -> None:
@@ -313,7 +349,7 @@ def fill_remaining_defaults(session: SessionState, template: Template) -> None:
     its static ``default_text``. Makes no LLM call: this is the "skip the rest,
     use template defaults" path."""
     for s in template.slots:
-        if session.slots.get(s.name) is None:
+        if session.slots.get(s.name) is None and not slot_suppressed(s, session):
             session.slots[s.name] = SlotValue(value=s.default_text, source="template_default")
     session.finished = True
 
@@ -367,7 +403,7 @@ def fill_unasked_slots(
     missing = [
         s
         for s in sorted(template.slots, key=lambda s: (s.priority, s.name))
-        if session.slots.get(s.name) is None
+        if session.slots.get(s.name) is None and not slot_suppressed(s, session)
     ]
     if not missing:
         session.finished = True
@@ -400,8 +436,24 @@ def fill_unasked_slots(
                 else:
                     session.slots[s.name] = SlotValue(value=value, source="llm_default")
 
-    for s in missing:  # static fallback for anything still unfilled
-        if session.slots.get(s.name) is None:
+    # Static fallback for anything still unfilled. A closed-answer slot (one with
+    # a hand-written menu) that the model simply didn't return is still a choice
+    # Keel is making for the user — mark it keel_decided with the slot's own
+    # default, not template_default, so a partial context-default response does
+    # not read as "no LLM assistance". A genuinely open slot with no model value,
+    # or the whole call failing / no provider, is a real fallback.
+    llm_ran = provider is not None and error is None
+    for s in missing:
+        if session.slots.get(s.name) is not None:
+            continue
+        if llm_ran and _has_choices(s):
+            session.slots[s.name] = SlotValue(
+                value=s.default_text,
+                source="keel_decided",
+                rationale="Keel's default for this project type; you did not pick an option.",
+                revisit_if="the default does not match how the project will actually be used.",
+            )
+        else:
             session.slots[s.name] = SlotValue(value=s.default_text, source="template_default")
 
     session.finished = True

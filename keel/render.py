@@ -42,19 +42,31 @@ SECTION_ORDER: list[tuple[str, str]] = [
     ("Input / Output contract", "io_contract"),
     ("Constraints", "constraints"),
     ("Acceptance criteria", "acceptance_criteria"),
+    ("Build order", "build_order"),
+    ("Project structure", "project_structure"),
     ("Decisions Keel made for you", "decisions"),
     ("Non-goals", "non_goals"),
     ("Open questions", "open_questions"),
 ]
 _HEADINGS = [h for h, _ in SECTION_ORDER]
 
-# The keys the synthesis model is asked to return a body for.
-_MODEL_SECTION_KEYS = [k for _, k in SECTION_ORDER if k != "decisions"]
+# Keys the synthesis model is asked to return a body for and that MUST be
+# non-empty or the render falls back. "decisions" is assembled in Python.
+_REQUIRED_MODEL_KEYS = [
+    "context", "objective", "io_contract", "constraints",
+    "acceptance_criteria", "non_goals", "open_questions",
+]
 
-# Sections that are omitted entirely when their body is empty, rather than
-# failing the render. "decisions" is present only when the user delegated at
-# least one slot to Keel.
-_OPTIONAL_SECTION_KEYS = {"decisions"}
+# Keys the model also returns, but which are additive: absent or empty just means
+# the section is omitted, never a fallback. Also suppressed wholesale at Quick
+# depth, which lacks the slot data (data_model / interfaces) to support them.
+_SOFT_MODEL_KEYS = ["build_order", "project_structure"]
+
+_MODEL_SECTION_KEYS = _REQUIRED_MODEL_KEYS + _SOFT_MODEL_KEYS
+
+# Sections omitted entirely when their body is empty (or, for the two soft keys,
+# when the session is Quick depth) rather than failing the render.
+_OPTIONAL_SECTION_KEYS = {"decisions", "build_order", "project_structure"}
 
 # Synthesis writes a whole document — and since Phase 2 it enumerates the full
 # interface surface — so it needs a generous budget. Too small and a verbose
@@ -96,8 +108,8 @@ fixed set of clarifying questions. Turn them into ONE coherent document.
 
 Return ONLY a JSON object with exactly these keys, and no others:
   "context", "objective", "io_contract", "constraints", "acceptance_criteria",
-  "non_goals", "open_questions", "resolved_conflicts"
-The first seven values are the markdown BODY of that section — sentences and/or bullet lists. \
+  "build_order", "project_structure", "non_goals", "open_questions", "resolved_conflicts"
+All but the last are the markdown BODY of that section — sentences and/or bullet lists. \
 Do NOT include the section heading itself. Do NOT add, rename, reorder, or drop keys.
 "resolved_conflicts" is a JSON ARRAY (possibly empty) — see the contradiction rule below.
 
@@ -116,6 +128,15 @@ How to write it:
 - "acceptance_criteria": a markdown bullet list of concrete, individually checkable statements \
   derived from the I/O contract and the definition of done. For anything with more than one \
   feature, give at least three.
+- "build_order": a NUMBERED list of 3 to 6 stages, derived from the interface surface, the data \
+  model, and the definition of done. Order by DEPENDENCY, not importance: the data model before \
+  the routes or commands that read it, read paths before write paths, the happy path before \
+  error handling. End each stage with one short clause on how to verify it works. If the answers \
+  do not support real stages, give a minimal three-stage skeleton — never invent scope.
+- "project_structure": a short directory / file tree derived from the constraints and the \
+  interface surface, one line of purpose per entry. No file contents, no code. Begin the section \
+  with one sentence stating this is a suggested starting layout, not a requirement, so an agent \
+  in an existing repo does not restructure it.
 - "constraints": the hard limits (language, offline, no paid APIs, dependency limits) AND the \
   runtime and scale. End it with the error-handling behaviour — what happens on bad input, a \
   missing or unreadable resource, and a partial failure — as its own short paragraph or bullet \
@@ -158,8 +179,9 @@ def _answers_block(session: SessionState) -> str:
     """The collected answers, one bullet per slot, in question order. Skipped or
     empty slots are marked so the model (and the conflict checker) can see them."""
     template = engine.load_template(session.template_name)
+    visible = engine.visible_slots(session, template)
     lines: list[str] = []
-    for slot in sorted(template.slots, key=lambda s: (s.priority, s.name)):
+    for slot in sorted(visible, key=lambda s: (s.priority, s.name)):
         state = session.slots.get(slot.name)
         if state is None or state.source == "skipped" or not state.value.strip():
             lines.append(f"- {slot.label} [{slot.name}]: (skipped by the developer — leave open)")
@@ -318,8 +340,12 @@ def _assemble_and_validate(
 ) -> tuple[str | None, str | None]:
     template = engine.load_template(session.template_name)
 
+    quick = session.depth == "quick" and session.mode != "guided"
+
     bodies: dict[str, str] = {}
     for key in _MODEL_SECTION_KEYS:
+        if key in _SOFT_MODEL_KEYS and quick:
+            continue  # Build order / Project structure are suppressed at Quick depth
         raw_val = sections.get(key, "")
         if isinstance(raw_val, list):  # some models return a bullet array, not a string
             raw_val = "\n".join(f"- {x}" if not str(x).lstrip().startswith(("-", "*")) else str(x)
@@ -329,6 +355,8 @@ def _assemble_and_validate(
             raw_val = raw_val.replace("\\n", "\n")
         body = _strip_injected_headings(raw_val.strip())
         if not body:
+            if key in _SOFT_MODEL_KEYS:
+                continue  # additive section — just omit it, never fall back
             return None, f"synthesis produced no '{key}' section"
         bodies[key] = body
 

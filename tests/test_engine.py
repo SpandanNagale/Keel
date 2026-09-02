@@ -125,9 +125,12 @@ def test_fill_remaining_defaults_backfills_every_slot_and_finishes(make_session)
     engine.freeze_pending(session, template)
     engine.fill_remaining_defaults(session, template)
     assert session.finished is True
-    for s in template.slots:  # required AND optional
+    # auth_model is suppressed once non_goals (here its default) already rules
+    # authentication out — so check the visible slots, not the raw template.
+    for s in engine.visible_slots(session, template):
         assert session.slots[s.name].source == "template_default"
         assert session.slots[s.name].value == s.default_text
+    assert "auth_model" not in session.slots  # suppressed by the default non_goals
     assert session.degraded is True  # a template-only spec is a real fallback
 
 

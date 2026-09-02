@@ -460,7 +460,10 @@ def _finalize(byok: str, byok_provider: str) -> None:
         return
     template = _load_template(session.template_name)
 
-    needs_fill = any(session.slots.get(s.name) is None for s in template.slots)
+    needs_fill = any(
+        session.slots.get(s.name) is None
+        for s in engine.visible_slots(session, template)
+    )
 
     provider, is_shared, blocking = _provider_for_call(byok, byok_provider)
     if blocking is not None:
@@ -728,7 +731,8 @@ def _sidebar_slot_panel() -> None:
     if session is None:
         return
     template = _load_template(session.template_name)
-    slots = sorted(template.slots, key=lambda s: (s.priority, s.name))
+    slots = sorted(engine.visible_slots(session, template),
+                   key=lambda s: (s.priority, s.name))
     with st.sidebar:
         st.divider()
         st.subheader("Progress")
@@ -1136,7 +1140,8 @@ def _view_result(byok: str, byok_provider: str) -> None:
     _resolved_conflicts_panel(session)
 
     template = _load_template(session.template_name)
-    panel_slots = sorted(template.slots, key=lambda s: (s.priority, s.name))
+    panel_slots = sorted(engine.visible_slots(session, template),
+                         key=lambda s: (s.priority, s.name))
     if _answered_minority(session, panel_slots):
         st.caption(
             "Most of this spec is Keel's suggestions rather than your decisions — "
@@ -1199,7 +1204,8 @@ def _wireframe_preview(byok: str, byok_provider: str, base: str) -> None:
 def _review_and_regenerate(byok: str, byok_provider: str) -> None:
     session = st.session_state.session
     template = _load_template(session.template_name)
-    slots = sorted(template.slots, key=lambda s: (s.priority, s.name))
+    slots = sorted(engine.visible_slots(session, template),
+                   key=lambda s: (s.priority, s.name))
 
     for slot in slots:  # seed each editor once; the user's edits then persist
         k = f"edit_{slot.name}"

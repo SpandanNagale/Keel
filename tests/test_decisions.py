@@ -166,8 +166,9 @@ def test_progress_breakdown_splits_answered_decided_skipped():
     s.slots[slots[3].name] = SlotValue(value="Keel suggested", source="llm_default")
     s.slots[slots[4].name] = SlotValue(value="", source="skipped")
 
+    pending = len(slots) - 5
     line = app._progress_breakdown(s, slots)
-    assert line == "2 answered · 2 Keel decided · 1 skipped · 4 pending"
+    assert line == f"2 answered · 2 Keel decided · 1 skipped · {pending} pending"
     assert "/" not in line  # never a bare n / n
 
 

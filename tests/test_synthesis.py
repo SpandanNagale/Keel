@@ -13,10 +13,13 @@ import pytest
 from keel import engine, llm, render
 
 _HEADINGS = [h for h, _ in render.SECTION_ORDER]
-# Headings that actually render for a session with no keel_decided slots — the
-# "Decisions Keel made for you" section is omitted when the user delegated
-# nothing.
-_HEADINGS_NO_DECISIONS = [h for h in _HEADINGS if h != "Decisions Keel made for you"]
+# The headings that render for a plain standard-depth session whose synthesis
+# stub returns only the seven core section bodies: no keel_decided slots (no
+# Decisions section) and no build_order / project_structure bodies.
+_CORE_HEADINGS = [
+    h for h, k in render.SECTION_ORDER
+    if k not in ("decisions", "build_order", "project_structure")
+]
 
 _FULL_SECTIONS = {
     "context": "A small personal tool. The person has hundreds of browser bookmarks "
@@ -66,7 +69,7 @@ def test_happy_path_assembles_all_seven_sections_in_fixed_order(monkeypatch):
     md, err = render.synthesize_spec(_finished_session(), provider=PROV)
     assert err is None
     h2s = [ln[3:].strip() for ln in md.splitlines() if ln.startswith("## ")]
-    assert h2s == _HEADINGS_NO_DECISIONS
+    assert h2s == _CORE_HEADINGS
     assert md.startswith("# Scrape my bookmarks and cluster them by topic")
     assert "_Not specified" not in md
     assert "Every input bookmark appears in exactly one cluster" in md
@@ -115,7 +118,7 @@ def test_model_injected_headings_are_stripped_not_honoured(monkeypatch):
     md, err = render.synthesize_spec(_finished_session(), provider=PROV)
     assert err is None
     h2s = [ln[3:].strip() for ln in md.splitlines() if ln.startswith("## ")]
-    assert h2s == _HEADINGS_NO_DECISIONS
+    assert h2s == _CORE_HEADINGS
     assert "Injected Heading" in md  # text kept, heading demoted
     assert "## Injected Heading" not in md
 

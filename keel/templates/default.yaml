@@ -192,3 +192,73 @@ slots:
       State what happens on bad input, on a missing or unreadable resource, and
       on a partial failure. Name the observable behaviour — message, exit code,
       no partial output. One or two sentences.
+
+  - name: auth_model
+    section: constraints
+    label: Sign-in and accounts
+    required: false
+    priority: 10
+    skip_if: "non_goals excludes authentication"
+    question_hint: "Do people sign in, and how — no login, a password with sessions, a password with tokens, or an outside account provider?"
+    why_this_matters: >-
+      Whether people log in, and how, shapes the data model (a users table), the
+      routes (sign in, sign out), and every screen that shows personal data.
+      Deciding it up front avoids bolting authentication on later. Keel records
+      the policy only — never a hashing algorithm, an iteration count, or a token
+      lifetime.
+    default_text: "No sign-in and no user accounts — everyone using it sees the same data."
+    default_strategy: >-
+      State the sign-in policy the idea implies in plain terms: no login,
+      password with server-side sessions, password with signed tokens, or an
+      external account provider. Never name a hashing algorithm, an iteration
+      count, or a token lifetime. One sentence.
+    choices:
+      - label: "No sign-in"
+        plain_language: "Anyone with the link can use it; there are no accounts."
+        tradeoff: "Nothing to build; everyone sees the same data and the same actions."
+        value: "No sign-in and no user accounts; everyone using it has the same access to the same data."
+      - label: "Password login, server sessions"
+        plain_language: "People sign in with a password and the server remembers them with a session cookie."
+        tradeoff: "Standard for a server-rendered app; needs a users table, sign-in and sign-out pages, and per-user data."
+        value: "Password sign-in with server-side sessions kept in a cookie; a users table and sign-in / sign-out routes; data scoped per user. No security parameters are specified here."
+      - label: "Password login, signed tokens"
+        plain_language: "People sign in and the app holds a token it sends with every request."
+        tradeoff: "Fits an API or a single-page app; the client has to store the token and refresh it."
+        value: "Password sign-in issuing a signed token the client sends on each request; a users table and a sign-in route; the client stores and refreshes the token. No security parameters are specified here."
+      - label: "Use an existing account"
+        plain_language: "People sign in with an account they already have (Google, GitHub, and the like) instead of a new password."
+        tradeoff: "No passwords to store; depends on an outside provider being reachable and configured."
+        value: "Sign-in delegated to an external account provider (OAuth / OpenID Connect); the app stores only a provider id and basic profile per user. No provider is chosen here."
+
+  - name: seed_data
+    section: constraints
+    label: Starting data
+    required: false
+    priority: 11
+    question_hint: "Does it ship with any data — empty, a few examples, a full sample set, or loaded from a file on first run?"
+    why_this_matters: >-
+      Whether the project ships with data decides what a fresh install looks
+      like and how you demo or test it. It is a small choice, but an agent
+      otherwise guesses — sometimes inventing records that look real.
+    default_text: "Ships empty; the first user creates all the data."
+    default_strategy: >-
+      State whether the project ships with data: empty, a few clearly-fake
+      examples, a full sample dataset, or imported from a file on first run. One
+      sentence. Default to empty unless the idea implies otherwise.
+    choices:
+      - label: "Ship empty"
+        plain_language: "It starts with no data; the first user adds everything."
+        tradeoff: "Nothing to prepare; a new install looks blank until someone uses it."
+        value: "Ships with no data; the first user creates every record."
+      - label: "A few examples"
+        plain_language: "A handful of obviously-fake sample rows so it is not empty on first run."
+        tradeoff: "Good for a demo; the examples must be clearly fake and easy to delete."
+        value: "Ships with a handful of clearly-labelled example records, easy to delete, so the app is not blank on first run."
+      - label: "A full sample set"
+        plain_language: "A realistic body of data loaded at setup."
+        tradeoff: "Best for trying features at a realistic size; larger, and must not be mistaken for real data."
+        value: "Ships with a full sample dataset loaded at setup, clearly marked as sample data, for realistic testing."
+      - label: "Load from a file"
+        plain_language: "It imports a data file you provide the first time it runs."
+        tradeoff: "Flexible; you have to produce and keep that file up to date."
+        value: "Imports its initial data from a file provided on first run; ships with none of its own."

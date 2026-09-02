@@ -1,9 +1,10 @@
 {
-  "schema_version": 2,
+  "schema_version": 3,
   "keel_session": {
     "original_prompt": "a booking website for a small hotel",
     "template_name": "web-app",
     "created_date": "2026-09-01",
+    "mode": "technical",
     "depth": "thorough",
     "pending_slots": [
       "io_contract",
@@ -18,39 +19,69 @@
     "slots": {
       "io_contract": {
         "value": "Guests open pages to search room availability by date and submit a booking form; the server renders a confirmation page.",
-        "source": "asked"
+        "source": "asked",
+        "rationale": "",
+        "revisit_if": ""
       },
       "runtime": {
         "value": "A single web server process on one instance.",
-        "source": "asked"
+        "source": "asked",
+        "rationale": "",
+        "revisit_if": ""
       },
       "scale": {
         "value": "Twelve rooms; a handful of bookings a day.",
-        "source": "asked"
+        "source": "asked",
+        "rationale": "",
+        "revisit_if": ""
       },
       "constraints": {
         "value": "Server-rendered Python (Flask) with a SQLite file. No build step.",
-        "source": "asked"
+        "source": "asked",
+        "rationale": "",
+        "revisit_if": ""
       },
       "non_goals": {
         "value": "No web UI or browser-facing pages of any kind; no frontend. Payments are also out of scope.",
-        "source": "asked"
+        "source": "asked",
+        "rationale": "",
+        "revisit_if": ""
       },
       "done": {
         "value": "A guest can complete a booking end to end in a web browser and see a confirmation page.",
-        "source": "asked"
+        "source": "asked",
+        "rationale": "",
+        "revisit_if": ""
       },
       "data_model": {
         "value": "Room(id, number, capacity); Booking(id, room_id, guest_name, check_in, check_out, created_at).",
-        "source": "asked"
+        "source": "asked",
+        "rationale": "",
+        "revisit_if": ""
       },
       "interfaces": {
         "value": "GET /  (availability search), POST /book  (create a booking), GET /booking/<id>  (confirmation).",
-        "source": "asked"
+        "source": "asked",
+        "rationale": "",
+        "revisit_if": ""
       },
       "error_handling": {
         "value": "An invalid date range re-renders the form with an inline error; a double-booking is rejected with a message.",
-        "source": "asked"
+        "source": "asked",
+        "rationale": "",
+        "revisit_if": ""
+      },
+      "auth_model": {
+        "value": "No sign-in and no user accounts — everyone using it sees the same data.",
+        "source": "template_default",
+        "rationale": "",
+        "revisit_if": ""
+      },
+      "seed_data": {
+        "value": "Ships empty; the first user creates all the data.",
+        "source": "template_default",
+        "rationale": "",
+        "revisit_if": ""
       }
     },
     "current_index": 0,

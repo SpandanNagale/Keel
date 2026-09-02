@@ -62,7 +62,10 @@ def test_frozen_fixtures_load_and_match_the_schema():
         # every slot filled with a real slot name
         for name in session.slots:
             assert template.slot(name) is not None
-        assert len(session.slots) == len(template.slots)
+        # every slot in play for this session (auth_model may be suppressed when
+        # the non-goals already exclude authentication) is filled
+        visible = {s.name for s in engine.visible_slots(session, template)}
+        assert set(session.slots) == visible
 
 
 def test_eval_harness_is_wired_and_runnable():

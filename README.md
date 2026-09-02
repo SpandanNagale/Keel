@@ -82,6 +82,13 @@ over the slot list, never "the model decides it has asked enough."
 | `data_model` | The core entities and the fields each record carries | optional |
 | `interfaces` | The concrete surface: endpoints, commands, screens, functions | optional |
 | `error_handling` | What happens on bad input, failure, or partial success | optional |
+| `auth_model` | Sign-in policy (no login / password+sessions / password+tokens / external) — policy only, never security parameters | optional |
+| `seed_data` | Whether the project ships with data (empty / examples / full sample / from a file) | optional |
+
+`auth_model` and `seed_data` are low-priority: never asked as questions, always
+`keel_decided` from their `choices` (or `template_default` with no LLM). `auth_model`
+carries a `skip_if` that suppresses it entirely — not asked, not defaulted, not
+rendered — when the `non_goals` answer already rules authentication out.
 
 An **audience mode** toggle on the start screen decides how questions are asked:
 
@@ -179,9 +186,19 @@ Call sites, all routed through `engine.capped_complete_json` (per-session cap of
    every answer and writes the whole document. It keeps each section consistent with the
    most specific answer, moves facts to the right section, enumerates the full interface
    surface, and expands each section to the length its content warrants. Section headings
-   and their order are owned by `render.py`, never the model: the model returns section
-   *bodies* keyed by name. It also returns `resolved_conflicts` — which of the
-   contradictions it was handed its document silenced, and how.
+   and their order are owned by `render.py` (`SECTION_ORDER`), never the model: the model
+   returns section *bodies* keyed by name. It also returns `resolved_conflicts` — which of
+   the contradictions it was handed its document silenced, and how.
+
+The document's sections, in order: Context, Objective, Input / Output contract,
+Constraints, Acceptance criteria, **Build order** (3–6 dependency-ordered stages with a
+verification line each), **Project structure** (a suggested file tree, labelled not a
+requirement), **Decisions Keel made for you** (one entry per `keel_decided` slot — the
+choice, the reason, a *revisit this if …* clause; omitted when empty), Non-goals, Open
+questions. `Build order` and `Project structure` come from the synthesis call and are
+suppressed at `Quick` depth; `Decisions Keel made for you` is assembled in Python. A
+one-sentence footer notes the spec benefits from review by someone with software
+experience.
 
 After synthesis, each pre-synthesis conflict is **re-validated against the document that
 was actually produced** (`render._revalidate_conflicts`). A conflict the model reported
