@@ -108,7 +108,7 @@ keel/models.py            pydantic models
 keel/engine.py            slot state machine, template loading, the capped LLM helper
 keel/render.py            synthesis pass + deterministic fallback -> markdown
 keel/llm.py               the one place an LLM is called; returns (result, error)
-keel/session_io.py        session <-> JSON, schema-version gate + migrations (v1 -> v2)
+keel/session_io.py        session <-> JSON, schema-version gate + migrations (v1 -> v3)
 keel/firecrawl.py         stdlib HTTP client for the Firecrawl scrape / map API
 keel/reference.py         reference intake: scraped markdown -> evidence -> slot candidates
 keel/mockup.py            optional static wireframe: LLM HTML -> allowlist sanitizer
@@ -140,10 +140,17 @@ reason and falls back to template text.
 Every answer carries a **source**: `extracted` (from your idea), `asked` (you typed it),
 `reference` (confirmed from a scraped reference — see below), `llm_default` (the model
 suggested it and you accepted), `template_default` (static YAML fallback, the model was
-unavailable), or `skipped`. `SessionState.degraded` is *derived*
-from that state — it is true only when a slot is on `template_default`, or the synthesis
-or conflict-check call actually failed. A transient earlier error that did not change the
-finished document (a missed extraction, one re-tried question) does not trip the banner.
+unavailable), `keel_decided` (you pressed **Decide for me** — Keel chose and recorded a
+one-line reason plus a *revisit this if …* condition, both surfaced in the
+*Decisions Keel made for you* section), or `skipped` (you left it deliberately open).
+`SessionState.degraded` is *derived* from that state — it is true only when a slot is on
+`template_default`, or the synthesis or conflict-check call actually failed; `keel_decided`
+is not a degradation. A transient earlier error that did not change the finished document
+(a missed extraction, one re-tried question) does not trip the banner.
+
+The sidebar never shows a bare `n / n resolved`: it breaks the count into
+`answered · Keel decided · skipped · pending`, so a spec that is mostly Keel's choices
+reads as exactly that.
 
 Call sites, all routed through `engine.capped_complete_json` (per-session cap of 14):
 

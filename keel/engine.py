@@ -19,6 +19,7 @@ uses the same capped helper.
 from __future__ import annotations
 
 import re
+from dataclasses import dataclass
 from functools import lru_cache
 from importlib import resources
 from pathlib import Path
@@ -51,6 +52,26 @@ MAX_REGENERATIONS = 3
 
 # Opening ideas longer than this are rejected before any call is made.
 MAX_PROMPT_CHARS = 500
+
+# The six core slots Guided mode always asks about, by name. Guided ignores the
+# depth selector entirely and defaults everything else; Technical mode keeps the
+# depth-driven optional slots.
+GUIDED_SLOTS = ("io_contract", "runtime", "scale", "constraints", "non_goals", "done")
+
+
+@dataclass
+class QuestionProposal:
+    """What :func:`next_question` hands back: the question to show, a recommended
+    answer the user can accept unchanged, and — from the same call, no extra
+    cost — a one-line ``rationale`` and ``revisit_if`` used only when the user
+    delegates the decision to Keel ("decide for me"). ``error`` is non-null when
+    the call failed and ``question`` / ``recommended`` fell back to static text."""
+
+    question: str
+    recommended: str
+    rationale: str = ""
+    revisit_if: str = ""
+    error: str | None = None
 
 _TEMPLATE_NAMES = ["default", "cli", "data-pipeline", "web-api", "web-app"]
 
@@ -235,6 +256,41 @@ def skip_slot(session: SessionState, slot_name: str) -> None:
     _advance(session)
 
 
+def decide_for_me(
+    session: SessionState,
+    slot_name: str,
+    value: str,
+    *,
+    rationale: str = "",
+    revisit_if: str = "",
+) -> None:
+    """Record a value the user explicitly delegated to Keel ("decide for me").
+
+    Distinct from :func:`skip_slot` (a deliberate open question) and from an
+    accepted ``llm_default`` (the user read it and said yes): here the user said
+    "I don't know — you choose", so the value carries a one-line ``rationale``
+    and a one-line ``revisit_if`` condition, both produced by the same call that
+    produced ``value``. It lands in "Decisions Keel made for you", never in
+    "Open questions"."""
+    session.slots[slot_name] = SlotValue(
+        value=value.strip(),
+        source="keel_decided",
+        rationale=rationale.strip(),
+        revisit_if=revisit_if.strip(),
+    )
+    session.questions_asked += 1
+    _advance(session)
+
+
+def _has_choices(slot: SlotDef) -> bool:
+    """Whether a slot has a small, known answer space (hand-written ``choices``
+    in the template YAML). Such a slot, when not asked, is delegated to Keel as
+    ``keel_decided`` rather than filled as a silent ``llm_default`` — the user
+    could have picked from a menu, so Keel picking for them is a real decision.
+    Safe before the field exists on older templates."""
+    return bool(getattr(slot, "choices", None))
+
+
 def fill_remaining_defaults(session: SessionState, template: Template) -> None:
     """Backfill every slot — required or optional — that was never resolved with
     its static ``default_text``. Makes no LLM call: this is the "skip the rest,
@@ -246,17 +302,23 @@ def fill_remaining_defaults(session: SessionState, template: Template) -> None:
 
 
 _CONTEXT_DEFAULT_SYSTEM = """You are Keel. Some specification dimensions were not asked about, to \
-keep the session short. Given the project idea and the answers already collected, fill each \
-remaining dimension with ONE concrete value the developer would most likely accept — the same \
-kind of finished spec line the questions produce.
+keep the session short — the developer delegated them to you. Given the project idea and the \
+answers already collected, decide each remaining dimension.
+
+For each one return an object with three fields:
+- "value": ONE concrete finished spec line the developer would most likely accept — the same \
+  kind of line the questions produce. Be specific and fully consistent with the answers already \
+  given. Do not hedge, do not offer options, do not restate the question.
+- "rationale": one sentence on why this choice is the reasonable default here.
+- "revisit_if": one sentence naming the condition under which this choice would be wrong (the \
+  thing that, if true, should send the developer back to reconsider it).
 
 Rules:
-- Be specific and fully consistent with the answers already given. Do not hedge, do not offer \
-  options, do not restate the question.
 - Do not invent product names, versions, or numeric figures that are not implied by what is \
-  already established.
-- Respond with a JSON object mapping each requested slot name to its value string. Include \
-  every slot asked for."""
+  already established. Prefer architectural shape (server-rendered vs single-page, one file vs \
+  a database, sessions vs tokens) over naming specific libraries.
+- Respond with a JSON object mapping each requested slot name to its {value, rationale, \
+  revisit_if} object. Include every slot asked for."""
 
 
 def _context_default_user(
@@ -304,8 +366,21 @@ def fill_unasked_slots(
         )
         if error is None:
             for s in missing:
-                value = str((result or {}).get(s.name, "")).strip()
-                if value:
+                value, rationale, revisit_if = _unpack_default_entry(
+                    (result or {}).get(s.name)
+                )
+                if not value:
+                    continue
+                # A slot with a hand-written menu the user could have picked from
+                # is a decision Keel made for them, not a silent contextual fill.
+                if _has_choices(s):
+                    session.slots[s.name] = SlotValue(
+                        value=value,
+                        source="keel_decided",
+                        rationale=rationale,
+                        revisit_if=revisit_if,
+                    )
+                else:
                     session.slots[s.name] = SlotValue(value=value, source="llm_default")
 
     for s in missing:  # static fallback for anything still unfilled
@@ -314,6 +389,19 @@ def fill_unasked_slots(
 
     session.finished = True
     return error
+
+
+def _unpack_default_entry(raw) -> tuple[str, str, str]:
+    """A context-default entry is either a plain string or a
+    ``{value, rationale, revisit_if}`` object. Return the three as stripped
+    strings (rationale / revisit_if empty for the plain-string form)."""
+    if isinstance(raw, dict):
+        return (
+            str(raw.get("value", "")).strip(),
+            str(raw.get("rationale", "")).strip(),
+            str(raw.get("revisit_if", "")).strip(),
+        )
+    return (str(raw or "").strip(), "", "")
 
 
 # --------------------------------------------------------------------------- #
@@ -427,8 +515,13 @@ Rules:
 never a menu of options, never a hedge.
 - Do not re-ask anything under "Already established".
 - Do not name specific library versions, and avoid recommending niche tools whose current \
-health you cannot verify.
-- Respond with a JSON object: {"question": "...", "recommended": "..."}"""
+health you cannot verify. Architectural shape (server-rendered vs single-page, one file vs a \
+database, sessions vs tokens, synchronous vs queued) is in scope; a specific package is not.
+- Also return "rationale": one sentence on why the recommended answer is a sensible default, \
+and "revisit_if": one sentence naming the condition under which it would be the wrong choice. \
+These are surfaced only when the developer delegates this decision to Keel.
+- Respond with a JSON object: {"question": "...", "recommended": "...", "rationale": "...", \
+"revisit_if": "..."}"""
 
 
 def _question_user(slot: SlotDef, session: SessionState, template: Template) -> str:
@@ -451,30 +544,37 @@ def _question_user(slot: SlotDef, session: SessionState, template: Template) -> 
 
 def next_question(
     session: SessionState, template: Template, *, provider: "llm.Provider | None"
-) -> tuple[str, str, str | None]:
+) -> QuestionProposal:
     """Generate the question + recommended default for the slot at
-    ``current_index``. Returns ``(question, recommended, error)``. On any
-    failure, returns the slot's static ``question_hint`` / ``default_text`` and a
-    non-null error. The session is not marked degraded here: it only degrades if
-    the user then accepts that static recommendation (``accept_answer`` records
-    it as ``template_default``)."""
+    ``current_index``, plus a one-line rationale and revisit condition (same
+    call, no extra cost — used only if the user picks "decide for me"). On any
+    failure, returns the slot's static ``question_hint`` / ``default_text`` with
+    a non-null ``error``. The session is not marked degraded here: it only
+    degrades if the user then accepts that static recommendation
+    (``accept_answer`` records it as ``template_default``)."""
     slot = current_slot(session, template)
     if slot is None:
-        return "", "", "no pending slot"
+        return QuestionProposal("", "", error="no pending slot")
 
     result, error = capped_complete_json(
         session, _QUESTION_SYSTEM, _question_user(slot, session, template),
         provider=provider,
     )
     if error is not None:
-        return slot.question_hint, slot.default_text, error
+        return QuestionProposal(slot.question_hint, slot.default_text, error=error)
 
-    question = str((result or {}).get("question", "")).strip()
-    recommended = str((result or {}).get("recommended") or (result or {}).get("default", "")).strip()
+    result = result or {}
+    question = str(result.get("question", "")).strip()
+    recommended = str(result.get("recommended") or result.get("default", "")).strip()
     if not question or not recommended:
-        return (
+        return QuestionProposal(
             slot.question_hint,
             slot.default_text,
-            f"model response missing question/recommended fields: {result!r}",
+            error=f"model response missing question/recommended fields: {result!r}",
         )
-    return question, recommended, None
+    return QuestionProposal(
+        question,
+        recommended,
+        rationale=str(result.get("rationale", "")).strip(),
+        revisit_if=str(result.get("revisit_if", "")).strip(),
+    )

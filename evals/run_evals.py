@@ -80,7 +80,8 @@ def run_case(case: dict, provider, persona_provider) -> dict:
         slot = engine.current_slot(session, template)
         if slot is None:
             break
-        q, rec, q_err = engine.next_question(session, template, provider=provider)
+        proposal = engine.next_question(session, template, provider=provider)
+        q, rec, q_err = proposal.question, proposal.recommended, proposal.error
         asked.append(slot.name)
         questions.append(q)
         established = [f"{n}: {v.value}" for n, v in session.slots.items() if v.value]

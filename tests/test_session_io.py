@@ -91,6 +91,48 @@ def test_a_v1_file_is_migrated_to_the_current_schema():
     assert back.reference is None and back.synthesis_failed is False
 
 
+def test_a_v2_file_loads_and_is_assumed_technical():
+    """Criterion 12: a session written before the mode split must still load."""
+    v2 = json.dumps({
+        "schema_version": 2,
+        "keel_session": {
+            "original_prompt": "a booking website for a small hotel",
+            "template_name": "web-app", "created_date": "2026-09-01",
+            "depth": "thorough", "finished": True,
+            "slots": {"runtime": {"value": "one server process", "source": "asked"}},
+        },
+    })
+    back, err = session_io.loads(v2)
+    assert err is None
+    assert back.mode == "technical"
+    assert back.slots["runtime"].value == "one server process"
+
+
+def test_keel_decided_rationale_and_revisit_round_trip():
+    s = _session()
+    s.slots["constraints"] = SlotValue(
+        value="server-rendered, one process", source="keel_decided",
+        rationale="smallest viable choice for a private tool",
+        revisit_if="public traffic is expected",
+    )
+    s.mode = "guided"
+    back, err = session_io.loads(session_io.dumps(s))
+    assert err is None
+    assert back.mode == "guided"
+    assert back.slots["constraints"].source == "keel_decided"
+    assert back.slots["constraints"].rationale == "smallest viable choice for a private tool"
+    assert back.slots["constraints"].revisit_if == "public traffic is expected"
+
+
+def test_committed_fixtures_still_load():
+    """The frozen eval fixtures on disk must keep loading across a schema bump."""
+    import pathlib
+
+    for fx in pathlib.Path("evals/fixtures").glob("*.json"):
+        back, err = session_io.loads(fx.read_text("utf-8"))
+        assert err is None, f"{fx.name}: {err}"
+
+
 def test_a_reference_round_trips():
     from keel.models import Evidence, ReferenceState, SlotCandidate, SlotValue
 

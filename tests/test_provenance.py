@@ -86,7 +86,8 @@ def test_session_with_no_failed_calls_never_degrades(stub_llm, make_session):
     engine.freeze_pending(session, template)
     while not session.finished:
         slot = engine.current_slot(session, template)
-        q, rec, err = engine.next_question(session, template, provider=PROV)
+        p = engine.next_question(session, template, provider=PROV)
+        q, rec, err = p.question, p.recommended, p.error
         engine.accept_answer(session, slot.name, rec, recommended=rec,
                              recommended_source="template_default" if err else "llm_default")
     engine.fill_unasked_slots(session, template, provider=PROV)

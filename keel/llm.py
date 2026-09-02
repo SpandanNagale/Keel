@@ -69,8 +69,9 @@ VISION_MODELS: dict[str, str] = {
 }
 VISION_MIME_TYPES = ("image/png", "image/jpeg", "image/webp")
 
-# One question is never worth more than this many output tokens.
-MAX_OUTPUT_TOKENS = 800
+# One question — plus its recommended answer, a one-line rationale, and a
+# one-line "revisit this if" condition — is never worth more than this.
+MAX_OUTPUT_TOKENS = 900
 
 # Back-compat alias: some callers/tests still reference a single default.
 DEFAULT_MODEL = DEFAULT_MODELS["anthropic"]

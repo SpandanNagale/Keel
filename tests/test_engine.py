@@ -222,7 +222,8 @@ def test_next_question_returns_model_output_on_success(make_session, stub_llm):
     template = engine.load_template("default")
     engine.freeze_pending(session, template)
 
-    q, rec, err = engine.next_question(session, template, provider=_PROVIDER)
+    p = engine.next_question(session, template, provider=_PROVIDER)
+    q, rec, err = p.question, p.recommended, p.error
     assert (q, rec, err) == ("How many bookmarks?", "About 2,000.", None)
     assert session.call_count == 1
     assert session.degraded is False
@@ -235,7 +236,8 @@ def test_next_question_falls_back_to_static_text_on_failure(make_session, stub_l
     engine.freeze_pending(session, template)
     slot = engine.current_slot(session, template)
 
-    q, rec, err = engine.next_question(session, template, provider=_PROVIDER)
+    p = engine.next_question(session, template, provider=_PROVIDER)
+    q, rec, err = p.question, p.recommended, p.error
     assert q == slot.question_hint
     assert rec == slot.default_text
     assert rec != slot.default_strategy
@@ -254,7 +256,8 @@ def test_next_question_treats_missing_fields_as_a_parse_failure(make_session, st
     engine.freeze_pending(session, template)
     slot = engine.current_slot(session, template)
 
-    q, rec, err = engine.next_question(session, template, provider=_PROVIDER)
+    p = engine.next_question(session, template, provider=_PROVIDER)
+    q, rec, err = p.question, p.recommended, p.error
     assert q == slot.question_hint and rec == slot.default_text
     assert "missing question/recommended" in err
     assert session.degraded is False  # not until the fallback is accepted
@@ -270,7 +273,7 @@ def test_session_call_cap_refuses_the_eleventh_call(make_session, stub_llm):
         engine.next_question(session, template, provider=_PROVIDER)
     assert session.call_count == engine.MAX_LLM_CALLS_PER_SESSION
 
-    q, rec, err = engine.next_question(session, template, provider=_PROVIDER)
+    err = engine.next_question(session, template, provider=_PROVIDER).error
     assert "limit reached" in err
     assert session.call_count == engine.MAX_LLM_CALLS_PER_SESSION  # not incremented
     assert session.degraded is False  # the fallback text has not been accepted
@@ -334,7 +337,7 @@ def test_accepting_every_default_finishes_in_at_most_eight_questions(make_sessio
         guard += 1
         assert guard < 20
         slot = engine.current_slot(session, template)
-        q, rec, err = engine.next_question(session, template, provider=_PROVIDER)
+        rec = engine.next_question(session, template, provider=_PROVIDER).recommended
         engine.accept_answer(session, slot.name, rec, recommended=rec)
 
     assert session.questions_asked <= engine.MAX_ASKED_QUESTIONS

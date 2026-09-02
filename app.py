@@ -111,9 +111,17 @@ _SOURCE_META = {
     "reference": ("from a reference", "reference"),
     "llm_default": ("Keel suggested", "llm-default"),
     "template_default": ("template fallback", "template-default"),
+    "keel_decided": ("Keel decided", "keel-decided"),
     "skipped": ("skipped", "skipped"),
     "pending": ("pending", "pending"),
 }
+
+# How the progress breakdown groups the seven sources. "answered" is the user's
+# own input; "decided" is anything Keel chose (a suggestion they accepted, a
+# static fallback, or an explicit "decide for me"); "skipped" is a deliberate
+# open question.
+_ANSWERED_SOURCES = ("extracted", "asked", "reference")
+_DECIDED_SOURCES = ("llm_default", "template_default", "keel_decided")
 
 
 def _chip(source: str) -> str:
@@ -176,18 +184,22 @@ def _generate_pending_question(byok: str, byok_provider: str) -> None:
             "slot": slot.name,
             "question": slot.question_hint,
             "recommended": slot.default_text,
+            "rationale": "",
+            "revisit_if": "",
             "error": blocking,
         }
         return
 
     if is_shared:
         _record_shared_call()
-    question, recommended, error = engine.next_question(session, template, provider=provider)
+    proposal = engine.next_question(session, template, provider=provider)
     st.session_state.pending_q = {
         "slot": slot.name,
-        "question": question,
-        "recommended": recommended,
-        "error": error,
+        "question": proposal.question,
+        "recommended": proposal.recommended,
+        "rationale": proposal.rationale,
+        "revisit_if": proposal.revisit_if,
+        "error": proposal.error,
     }
 
 
@@ -653,6 +665,42 @@ def _sidebar_byok() -> tuple[str, str]:
     return key, provider
 
 
+def _progress_breakdown(session, slots) -> str:
+    """Honest progress: never a bare ``n / n``. Splits the count into what the
+    user answered, what Keel decided, what was skipped, and what is still
+    pending — the "9 / 9 resolved" line over a fully-defaulted spec was the
+    product lying about its own output (spec A6)."""
+    answered = decided = skipped = pending = 0
+    for s in slots:
+        cur = session.slots.get(s.name)
+        if cur is None:
+            pending += 1
+        elif cur.source in _ANSWERED_SOURCES:
+            answered += 1
+        elif cur.source in _DECIDED_SOURCES:
+            decided += 1
+        elif cur.source == "skipped":
+            skipped += 1
+    parts = [f"{answered} answered", f"{decided} Keel decided", f"{skipped} skipped"]
+    if pending:
+        parts.append(f"{pending} pending")
+    return " · ".join(parts)
+
+
+def _answered_minority(session, slots) -> bool:
+    """True when the user's own answers are a minority of the resolved slots —
+    the cue for a neutral "most of this is Keel's suggestions" line."""
+    answered = resolved = 0
+    for s in slots:
+        cur = session.slots.get(s.name)
+        if cur is None:
+            continue
+        resolved += 1
+        if cur.source in _ANSWERED_SOURCES:
+            answered += 1
+    return resolved > 0 and answered * 2 < resolved
+
+
 def _sidebar_slot_panel() -> None:
     """Live state of every slot — the slot model made visible instead of hidden."""
     session = st.session_state.session
@@ -672,8 +720,7 @@ def _sidebar_slot_panel() -> None:
                 f"{_chip(source)}</div>"
             )
         st.markdown("".join(rows), unsafe_allow_html=True)
-        done = sum(1 for s in slots if session.slots.get(s.name))
-        st.caption(f"{done} / {len(slots)} dimensions resolved")
+        st.caption(_progress_breakdown(session, slots))
 
 
 def _view_intro(byok: str, byok_provider: str) -> None:
@@ -985,6 +1032,14 @@ def _view_result(byok: str, byok_provider: str) -> None:
 
     _conflict_banner(session)
     _resolved_conflicts_panel(session)
+
+    template = _load_template(session.template_name)
+    panel_slots = sorted(template.slots, key=lambda s: (s.priority, s.name))
+    if _answered_minority(session, panel_slots):
+        st.caption(
+            "Most of this spec is Keel's suggestions rather than your decisions — "
+            "worth reviewing the Decisions section before handing it to an agent."
+        )
 
     slug = engine.slugify(session.title())
     base = f"keel-{slug}-{session.created_date}"

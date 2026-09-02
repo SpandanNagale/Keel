@@ -35,6 +35,7 @@
 .keel-chip--reference        { background: #2c1f42; color: #c3a6f0; border-color: #45356a; }
 .keel-chip--llm-default      { background: #1b2f3a; color: #86c7d8; border-color: #2c4b5a; }
 .keel-chip--template-default { background: #3a2f16; color: #e8c473; border-color: #5c4a24; }
+.keel-chip--keel-decided     { background: #3a1f2c; color: #e6a6c3; border-color: #5c2b40; }
 .keel-chip--skipped          { background: #2a2f36; color: #9aa7b4; border-color: #3c454f; }
 .keel-chip--pending          { background: transparent; color: #8aa0b4; border-color: #3c4b5c; }
 

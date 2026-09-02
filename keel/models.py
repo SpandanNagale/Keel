@@ -18,13 +18,22 @@ from pydantic import BaseModel, Field
 #   reference        - confirmed from a scraped reference (a URL / product / image)
 #   llm_default      - an LLM generated a contextual default; the user accepted it
 #   template_default - static YAML fallback text; the LLM was unavailable
-#   skipped          - the user declined to answer
+#   keel_decided     - the user said "decide for me"; Keel chose and recorded why
+#   skipped          - the user declined to answer (deliberately left open)
 #
 # The split between llm_default and template_default matters: only the latter is
 # a genuine degradation. A uniform "Keel default" label was Bug 1 — it made the
 # sidebar and the degraded banner lie about a document full of contextual detail.
+# keel_decided is distinct again: the user explicitly delegated the choice, so it
+# is neither a silent default nor a skip — it earns its own output section.
 SlotSource = Literal[
-    "extracted", "asked", "reference", "llm_default", "template_default", "skipped"
+    "extracted",
+    "asked",
+    "reference",
+    "llm_default",
+    "template_default",
+    "keel_decided",
+    "skipped",
 ]
 
 # Fixed output sections, in render order. Every slot's ``section`` must be one of
@@ -77,6 +86,12 @@ class Template(BaseModel):
 class SlotValue(BaseModel):
     value: str = ""
     source: SlotSource
+    # Populated only when ``source == "keel_decided"``: a one-line reason the
+    # value was chosen and a one-line condition under which it would be wrong.
+    # Both come from the same LLM call that produced ``value`` — never an extra
+    # call. They feed the "Decisions Keel made for you" output section.
+    rationale: str = ""
+    revisit_if: str = ""
 
 
 # --------------------------------------------------------------------------- #
@@ -132,8 +147,15 @@ class SessionState(BaseModel):
     original_prompt: str
     template_name: str
     created_date: str
+    # Audience mode. "guided" (default for new sessions) asks only the six core
+    # slots with choice-first questions and defaults the rest aggressively;
+    # "technical" keeps the terse free-text questions and the depth selector.
+    # The model default is "technical" so a session file written before this
+    # field existed loads as Technical, per the migration.
+    mode: str = "technical"
     # How many slots to ASK about: "quick" (6), "standard" (8), "thorough" (9,
-    # trimmed to the asked cap). Optional slots not asked are defaulted, not omitted.
+    # trimmed to the asked cap). Optional slots not asked are defaulted, not
+    # omitted. Ignored in Guided mode, which fixes its own six-slot set.
     depth: str = "standard"
     # Ordered list of slot names still to ask about, frozen at Start so the
     # "Question X of N" progress counter never moves under the user.
@@ -190,3 +212,8 @@ class SessionState(BaseModel):
 
     def skipped_slots(self) -> list[str]:
         return [name for name, v in self.slots.items() if v.source == "skipped"]
+
+    def decided_slots(self) -> list[str]:
+        """Slots the user delegated to Keel ("decide for me"). These land in
+        the "Decisions Keel made for you" section, never in "Open questions"."""
+        return [name for name, v in self.slots.items() if v.source == "keel_decided"]

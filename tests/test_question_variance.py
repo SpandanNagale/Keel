@@ -40,7 +40,8 @@ def _run(prompt: str, monkeypatch) -> tuple[list[str], str]:
         guard += 1
         assert guard < 20
         slot = engine.current_slot(session, template)
-        q, rec, err = engine.next_question(session, template, provider=_PROVIDER)
+        p = engine.next_question(session, template, provider=_PROVIDER)
+        q, rec, err = p.question, p.recommended, p.error
         assert err is None
         questions.append(q)
         engine.accept_answer(session, slot.name, rec, recommended=rec)

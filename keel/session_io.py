@@ -16,7 +16,11 @@ from keel.models import SessionState
 #   1 -> 2 (Phase 0/1): SlotSource "defaulted" split into llm_default /
 #          template_default; "degraded" is now derived, not stored; added
 #          synthesis_failed, resolved_conflicts, reference.
-SCHEMA_VERSION = 2
+#   2 -> 3 (Part A/B): added SessionState.mode (Guided / Technical), SlotValue
+#          gained rationale / revisit_if for the keel_decided source, and the
+#          auth_model / seed_data slots joined the taxonomy. A v2 file predates
+#          the mode split and loads as Technical.
+SCHEMA_VERSION = 3
 
 _WRAPPER_KEY = "keel_session"
 
@@ -32,8 +36,16 @@ def _migrate_1_to_2(body: dict) -> dict:
     return body
 
 
+def _migrate_2_to_3(body: dict) -> dict:
+    """A v2 file predates Guided/Technical mode. Default it to Technical, which
+    is how it was authored. New SlotValue fields (rationale / revisit_if) and
+    the new optional slots default in via the model, so nothing else is needed."""
+    body.setdefault("mode", "technical")
+    return body
+
+
 # version N -> N+1
-_MIGRATIONS = {1: _migrate_1_to_2}
+_MIGRATIONS = {1: _migrate_1_to_2, 2: _migrate_2_to_3}
 
 
 def dumps(session: SessionState) -> str:
