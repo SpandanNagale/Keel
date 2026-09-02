@@ -192,6 +192,36 @@ Point a new app at `app.py`, set one of `GROQ_API_KEY` / `OLLAMA_API_KEY` /
 `requirements.txt` pins the dependencies. Do **not** set `KEEL_PROVIDER=ollama` on a
 deployed app — there is no local daemon there and every call will fail loudly.
 
+## Evals
+
+```
+python evals/run_evals.py                       # provider auto-picked; writes evals/RESULTS.md
+KEEL_PROVIDER=ollama python evals/run_evals.py  # local model — no hosted quota, for iteration
+python evals/run_evals.py --persona deterministic --limit 3   # fast partial pass
+```
+
+[`evals/cases.json`](evals/cases.json) holds ~15 hand-labelled vague prompts: for each, the
+slots a competent engineer would insist on pinning down, a persona for the simulated user,
+the facts the prompt already states, and any contradiction `check_conflicts` should catch.
+[`evals/simulated_user.py`](evals/simulated_user.py) answers each question in character (or,
+with no provider, accepts the recommendation and skips on a fixed schedule).
+
+`run_evals.py` runs every case end to end and writes `evals/RESULTS.md`. Commit that file
+when you tune a prompt, so the next run's diff shows what moved. Metrics are pure Python, no
+judge model: slot coverage, mean questions asked, missed-ambiguity rate, redundancy rate,
+conflict recall, and false-precision rate (numbers in the spec that trace to no answer). The
+table stamps the model and persona mode that produced it.
+
+[`evals/fixtures/`](evals/fixtures/) holds two frozen sessions whose answers contradict each
+other — the hotel-website "no UI" case and the health-monitoring "offline but AI-generated"
+case. They are permanent regression cases: re-run them after any edit to the question,
+conflict, or synthesis prompt. `run_evals.py` exits non-zero if either stops being caught.
+Rebuild them with `python evals/fixtures/build_fixtures.py` only if the slot taxonomy changes.
+
+The committed `RESULTS.md` records which model and persona mode produced it. A small local
+model scores differently from a hosted one — iterate locally, but regenerate the committed
+table against the hosted model before trusting the numbers.
+
 ## Tests
 
 ```

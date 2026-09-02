@@ -1,0 +1,125 @@
+{
+  "_readme": "Hand-labelled eval cases. 'required_slots' = the dimensions a competent engineer would insist on pinning down for THIS idea (the rest are safely defaulted). 'prompt_facts' = things the one-line prompt already states; a question that re-asks one is redundant. 'expected_conflicts' = substrings check_conflicts should surface.",
+  "cases": [
+    {
+      "id": "hotel-website",
+      "prompt": "a booking website for a small hotel",
+      "required_slots": ["io_contract", "data_model", "interfaces", "constraints", "non_goals", "done"],
+      "persona": "You run a 12-room hotel. Guests should see availability and book a room online. Payments are out of scope for now. Answer plainly and briefly. If asked about something you have not considered, say you are not sure and let Keel default it.",
+      "prompt_facts": ["website", "hotel", "booking"],
+      "expected_conflicts": []
+    },
+    {
+      "id": "rest-api-notes",
+      "prompt": "a REST API for my notes app",
+      "required_slots": ["io_contract", "data_model", "interfaces", "constraints", "non_goals", "done"],
+      "persona": "You are building the backend for a personal notes app. JSON over HTTP. One user, no sharing. Answer plainly; do not invent scale numbers you do not have.",
+      "prompt_facts": ["rest", "api", "notes"],
+      "expected_conflicts": []
+    },
+    {
+      "id": "rename-photos",
+      "prompt": "rename my photos by the date they were taken",
+      "required_slots": ["io_contract", "interfaces", "constraints", "non_goals", "done", "error_handling"],
+      "persona": "You have a folder of JPEGs from a phone and a camera. You want them renamed to their capture date. A dry-run mode would be nice. Answer plainly and keep it small.",
+      "prompt_facts": ["rename", "photos", "date"],
+      "expected_conflicts": []
+    },
+    {
+      "id": "scrape-bookmarks",
+      "prompt": "scrape my bookmarks and cluster them by topic",
+      "required_slots": ["io_contract", "data_model", "constraints", "non_goals", "done"],
+      "persona": "You exported your browser bookmarks to HTML. You want them grouped into topic clusters in a file you can read. Local only, no paid APIs. Answer plainly.",
+      "prompt_facts": ["scrape", "bookmarks", "cluster", "topic"],
+      "expected_conflicts": []
+    },
+    {
+      "id": "dedupe-contacts",
+      "prompt": "dedupe my contacts export",
+      "required_slots": ["io_contract", "data_model", "constraints", "done", "error_handling"],
+      "persona": "You have a CSV export of contacts with duplicates (same person, slightly different names or emails). You want one clean CSV out. Answer plainly; be conservative about deleting.",
+      "prompt_facts": ["dedupe", "contacts", "export"],
+      "expected_conflicts": []
+    },
+    {
+      "id": "health-chatbot",
+      "prompt": "AI chat bot for health monitoring",
+      "required_slots": ["io_contract", "interfaces", "data_model", "constraints", "non_goals", "done"],
+      "persona": "You want a chatbot a person can message about how they are feeling and get back some guidance. It should run on your own machine with no paid services. Answer plainly and do not volunteer extra scope.",
+      "prompt_facts": ["chat bot", "health"],
+      "expected_conflicts": ["offline", "AI"]
+    },
+    {
+      "id": "standup-bot",
+      "prompt": "a Slack bot that posts a daily standup reminder",
+      "required_slots": ["io_contract", "interfaces", "runtime", "constraints", "non_goals", "done"],
+      "persona": "You want a bot that posts a standup prompt to one Slack channel every weekday morning. No thread parsing, no summaries. Answer plainly.",
+      "prompt_facts": ["slack bot", "daily", "standup", "reminder"],
+      "expected_conflicts": []
+    },
+    {
+      "id": "csv-to-sqlite",
+      "prompt": "a tool to load a folder of CSVs into a SQLite database",
+      "required_slots": ["io_contract", "data_model", "interfaces", "constraints", "done", "error_handling"],
+      "persona": "You have a folder of CSV files with headers. You want each loaded into its own table in one SQLite file. Answer plainly; say what should happen when a CSV is malformed.",
+      "prompt_facts": ["csv", "sqlite", "folder", "load"],
+      "expected_conflicts": []
+    },
+    {
+      "id": "url-shortener",
+      "prompt": "a URL shortener",
+      "required_slots": ["io_contract", "data_model", "interfaces", "scale", "constraints", "non_goals", "done"],
+      "persona": "You want a service that takes a long URL and returns a short code, and redirects the short code to the original. Personal use, low traffic. Answer plainly.",
+      "prompt_facts": ["url shortener"],
+      "expected_conflicts": []
+    },
+    {
+      "id": "expense-tracker",
+      "prompt": "a small web app to track my monthly expenses",
+      "required_slots": ["io_contract", "data_model", "interfaces", "constraints", "non_goals", "done"],
+      "persona": "You want to add expenses (amount, category, date, note) and see a monthly total. Just you. No bank integration. Answer plainly.",
+      "prompt_facts": ["web app", "track", "expenses", "monthly"],
+      "expected_conflicts": []
+    },
+    {
+      "id": "log-anomaly",
+      "prompt": "flag anomalies in my nginx access logs",
+      "required_slots": ["io_contract", "data_model", "constraints", "done", "error_handling"],
+      "persona": "You have nginx access logs. You want a report of unusual spikes or error bursts. One-off local run. Answer plainly; do not invent thresholds you have not decided.",
+      "prompt_facts": ["anomalies", "nginx", "access logs", "flag"],
+      "expected_conflicts": []
+    },
+    {
+      "id": "markdown-blog",
+      "prompt": "a static site generator for my markdown blog",
+      "required_slots": ["io_contract", "interfaces", "constraints", "non_goals", "done"],
+      "persona": "You have a folder of Markdown posts with front matter. You want HTML pages and an index out. No themes marketplace, no plugins. Answer plainly.",
+      "prompt_facts": ["static site generator", "markdown", "blog"],
+      "expected_conflicts": []
+    },
+    {
+      "id": "pdf-invoice",
+      "prompt": "generate PDF invoices from a JSON file",
+      "required_slots": ["io_contract", "data_model", "interfaces", "constraints", "done", "error_handling"],
+      "persona": "You have a JSON file describing invoices (client, line items, totals). You want one PDF per invoice. Answer plainly; say what happens if a record is missing a field.",
+      "prompt_facts": ["pdf", "invoices", "json"],
+      "expected_conflicts": []
+    },
+    {
+      "id": "feed-digest",
+      "prompt": "email me a weekly digest of my RSS feeds",
+      "required_slots": ["io_contract", "runtime", "constraints", "non_goals", "done"],
+      "persona": "You have a list of RSS feed URLs. Once a week you want an email with the new items grouped by feed. Answer plainly.",
+      "prompt_facts": ["email", "weekly", "digest", "rss"],
+      "expected_conflicts": []
+    },
+    {
+      "id": "image-thumbnails",
+      "prompt": "batch-resize images to thumbnails",
+      "required_slots": ["io_contract", "interfaces", "scale", "constraints", "done", "error_handling"],
+      "persona": "You have folders of images. You want thumbnails at a fixed max size written to a parallel folder. Answer plainly; keep dependencies small.",
+      "prompt_facts": ["batch", "resize", "images", "thumbnails"],
+      "expected_conflicts": []
+    }
+  ]
+}

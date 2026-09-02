@@ -1,0 +1,65 @@
+{
+  "schema_version": 1,
+  "keel_session": {
+    "original_prompt": "a booking website for a small hotel",
+    "template_name": "web-app",
+    "created_date": "2026-09-01",
+    "depth": "thorough",
+    "pending_slots": [
+      "io_contract",
+      "runtime",
+      "scale",
+      "constraints",
+      "non_goals",
+      "done",
+      "data_model",
+      "interfaces"
+    ],
+    "slots": {
+      "io_contract": {
+        "value": "Guests open pages to search room availability by date and submit a booking form; the server renders a confirmation page.",
+        "source": "asked"
+      },
+      "runtime": {
+        "value": "A single web server process on one instance.",
+        "source": "asked"
+      },
+      "scale": {
+        "value": "Twelve rooms; a handful of bookings a day.",
+        "source": "asked"
+      },
+      "constraints": {
+        "value": "Server-rendered Python (Flask) with a SQLite file. No build step.",
+        "source": "asked"
+      },
+      "non_goals": {
+        "value": "No web UI or browser-facing pages of any kind; no frontend. Payments are also out of scope.",
+        "source": "asked"
+      },
+      "done": {
+        "value": "A guest can complete a booking end to end in a web browser and see a confirmation page.",
+        "source": "asked"
+      },
+      "data_model": {
+        "value": "Room(id, number, capacity); Booking(id, room_id, guest_name, check_in, check_out, created_at).",
+        "source": "asked"
+      },
+      "interfaces": {
+        "value": "GET /  (availability search), POST /book  (create a booking), GET /booking/<id>  (confirmation).",
+        "source": "asked"
+      },
+      "error_handling": {
+        "value": "An invalid date range re-renders the form with an inline error; a double-booking is rejected with a message.",
+        "source": "asked"
+      }
+    },
+    "current_index": 0,
+    "questions_asked": 0,
+    "call_count": 0,
+    "degraded": false,
+    "finished": true,
+    "regen_count": 0,
+    "conflicts": [],
+    "conflict_check_error": null
+  }
+}

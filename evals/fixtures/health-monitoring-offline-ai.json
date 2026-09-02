@@ -1,0 +1,65 @@
+{
+  "schema_version": 1,
+  "keel_session": {
+    "original_prompt": "AI chat bot for health monitoring",
+    "template_name": "default",
+    "created_date": "2026-09-01",
+    "depth": "thorough",
+    "pending_slots": [
+      "io_contract",
+      "runtime",
+      "scale",
+      "constraints",
+      "non_goals",
+      "done",
+      "data_model",
+      "interfaces"
+    ],
+    "slots": {
+      "io_contract": {
+        "value": "A POST endpoint takes a free-text health message and returns an AI-generated interpretation with suggested next steps.",
+        "source": "asked"
+      },
+      "runtime": {
+        "value": "A local long-running HTTP server.",
+        "source": "asked"
+      },
+      "scale": {
+        "value": "One user, a few messages a day.",
+        "source": "asked"
+      },
+      "constraints": {
+        "value": "Python standard library only. Runs fully offline: no external or paid APIs, and no model downloads or local model weights.",
+        "source": "asked"
+      },
+      "non_goals": {
+        "value": "No authentication, no database, no web UI.",
+        "source": "asked"
+      },
+      "done": {
+        "value": "Sending a message returns a relevant AI-generated interpretation of the described symptoms.",
+        "source": "asked"
+      },
+      "data_model": {
+        "value": "Message(id, text, received_at); Reply(id, message_id, text, sent_at).",
+        "source": "asked"
+      },
+      "interfaces": {
+        "value": "POST /chat  {text} -> {interpretation, steps}.",
+        "source": "asked"
+      },
+      "error_handling": {
+        "value": "An empty or oversized body returns 400 with a JSON error; an internal failure returns 500 without a stack trace.",
+        "source": "asked"
+      }
+    },
+    "current_index": 0,
+    "questions_asked": 0,
+    "call_count": 0,
+    "degraded": false,
+    "finished": true,
+    "regen_count": 0,
+    "conflicts": [],
+    "conflict_check_error": null
+  }
+}
