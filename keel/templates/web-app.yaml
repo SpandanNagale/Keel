@@ -11,6 +11,10 @@ slots:
     required: true
     priority: 1
     question_hint: "What pages or views does a user move through, what do they submit, and what data is displayed back?"
+    why_this_matters: >-
+      This pins down the pages a user moves through, what each form submits, and
+      what data comes back. An agent builds the routes, templates, and storage
+      around this, so a vague answer here makes the whole app vague.
     default_text: "The pages and forms the idea implies — typically a main view that lists or displays items and a form to create or edit one. User input is submitted over HTTP and the updated view is rendered back. Data persists between visits in a single local store (SQLite or a JSON file)."
     default_strategy: >-
       List the concrete pages/views a user navigates, what each form submits,
@@ -23,10 +27,32 @@ slots:
     required: true
     priority: 2
     question_hint: "How is this served and run — a local dev server, a single deployed instance, a static host?"
+    why_this_matters: >-
+      How the app is served decides its shape and how much you can rely on it:
+      a dev server is fine to demo but must not face real users, one deployed
+      instance handles steady traffic, and managed hosting scales without a
+      rebuild. It also drives how much infrastructure you take on.
     default_text: "Runs as a single web server process (the framework's dev server locally); one instance, no load balancer."
     default_strategy: >-
       State how the app is served and run, based on the idea. One sentence.
       Default to a single server process on the framework's dev server.
+    choices:
+      - label: "One small server"
+        plain_language: "A single web-server process on one machine, running the framework's built-in server."
+        tradeoff: "Simplest to set up; fine for a demo or a handful of users, not for real traffic."
+        value: "A single web-server process on one instance using the framework's development server; no load balancer. Suitable for local use and small private audiences only."
+      - label: "One instance, properly served"
+        plain_language: "A single long-running instance behind a real production web server, restarted automatically if it crashes."
+        tradeoff: "A bit more setup; handles steady real traffic without babysitting."
+        value: "A single deployed instance behind a production WSGI/ASGI server, run under a process manager that restarts it on failure; one instance, no load balancer."
+      - label: "Managed hosting"
+        plain_language: "Runs on a platform that can start more copies of the app as load grows."
+        tradeoff: "More moving parts up front; scales without a rebuild later."
+        value: "Deployed to a managed platform that can run multiple stateless copies behind a load balancer; sessions and uploads kept out of local process memory."
+      - label: "Mostly static pages"
+        plain_language: "Pre-built pages served as files, with a small server only for the parts that change."
+        tradeoff: "Cheap and fast to serve; only works if most of the app is read-only."
+        value: "Pre-rendered static pages served from a static host, with a small backend only for the genuinely dynamic parts (form submissions, per-user data)."
 
   - name: scale
     section: context
@@ -34,11 +60,33 @@ slots:
     required: true
     priority: 3
     question_hint: "How many users and how much data — a personal tool, a small team, or public traffic?"
+    why_this_matters: >-
+      How many people use it at once decides whether a file-based store and a
+      single process are safe, or whether you need a real database and a
+      production server. Guessing high wastes effort; guessing low forces a
+      rebuild. A rough audience size is enough.
     default_text: "A personal or small-team tool: a handful of concurrent users and up to a few thousand stored records."
     default_strategy: >-
       Give expected concurrent users and stored-record volume, based on the
       idea. One sentence. Assume a small private audience unless the idea says
       otherwise.
+    choices:
+      - label: "Just me"
+        plain_language: "You are the only user, using it occasionally."
+        tradeoff: "No need to handle people using it at the same time; a single file store is plenty."
+        value: "A single user, used occasionally; up to a few thousand records in a file-based or SQLite store. No concurrency to speak of."
+      - label: "A small team"
+        plain_language: "A handful of people, sometimes at the same time; a few thousand records."
+        tradeoff: "Still simple — one server and SQLite are fine — but writes need basic care."
+        value: "A handful of concurrent users on a small team; up to low tens of thousands of records in SQLite; occasional simultaneous writes handled with simple locking."
+      - label: "A few hundred users"
+        plain_language: "Hundreds of people might use it, some at the same time."
+        tradeoff: "Needs a real database and a production server process, not the dev server."
+        value: "Up to a few hundred users with tens of simultaneous requests; a client/server database (PostgreSQL or equivalent) and a production application server."
+      - label: "Public traffic"
+        plain_language: "Thousands of users, growing, from the open internet."
+        tradeoff: "Needs capacity planning, caching, and a managed database — a bigger build."
+        value: "Public-facing with thousands of users and sustained concurrency; a managed database, a caching layer, and horizontal scaling are in scope."
 
   - name: constraints
     section: constraints
@@ -46,11 +94,32 @@ slots:
     required: true
     priority: 4
     question_hint: "Any hard limits — a required framework or language, no build step, no paid services, must work offline?"
+    why_this_matters: >-
+      Hard limits — a required language or framework, no separate frontend build
+      step, no paid services, a particular datastore — rule options in or out
+      before design starts. "No unusual limits" is a fine answer.
     default_text: "Python with Flask (server-rendered templates, minimal JavaScript), no separate frontend build step, no paid services, and a file-based or SQLite datastore."
     default_strategy: >-
       List the hard limits the idea implies (framework, language, build step,
       paid services, datastore, offline). One or two sentences. Default to a
       server-rendered Python app with no build step.
+    choices:
+      - label: "Server-rendered, no build step"
+        plain_language: "Pages built on the server from templates, with little or no JavaScript tooling."
+        tradeoff: "Simplest to build and deploy; less slick for highly interactive screens."
+        value: "Server-rendered HTML templates with minimal JavaScript; no separate frontend build step; a file-based or SQLite datastore; no paid services."
+      - label: "A single-page frontend"
+        plain_language: "A JavaScript app in the browser talking to an API, built with the usual frontend tooling."
+        tradeoff: "Smoother interactions; a build step, more moving parts, and a separate API to maintain."
+        value: "A single-page browser application built with a mainstream frontend framework and its build tooling, talking to a JSON API; no paid services."
+      - label: "Must fit an existing stack"
+        plain_language: "It has to use the language, framework, or datastore already named in your answer."
+        tradeoff: "Consistent with what you already run; constrained by those choices."
+        value: "Constrained to the language, framework, and datastore already in use (as named); no new runtime dependencies beyond that stack."
+      - label: "No hard limits"
+        plain_language: "Any mainstream web framework is fine, and free hosted services are acceptable."
+        tradeoff: "Fewest limits on the build; more choices to make and keep current."
+        value: "No hard constraints beyond good sense — any mainstream web framework and free-tier hosted services may be used."
 
   - name: non_goals
     section: non_goals
@@ -58,6 +127,11 @@ slots:
     required: true
     priority: 5
     question_hint: "What should the agent explicitly NOT build — user accounts and auth, payments, a design system, a native mobile app, real-time updates, admin tooling?"
+    why_this_matters: >-
+      Naming what NOT to build stops an agent adding payments, a design system,
+      a native app, or real-time updates you never asked for. Each non-goal
+      should be a concrete thing an agent might otherwise build unprompted. The
+      UI itself is never a non-goal here — this project has one.
     default_text: "No user accounts or authentication, no payments or billing, no design system or theming, no native mobile app, no real-time or websocket updates, and no separate admin panel. A functional, plainly-styled web UI is in scope."
     default_strategy: >-
       List 3-6 things the agent should NOT build for a web app — auth, payments,
@@ -71,6 +145,10 @@ slots:
     required: true
     priority: 6
     question_hint: "How will you know it works — which user flows must complete end to end in a browser?"
+    why_this_matters: >-
+      The user flows that must complete end to end in a browser — what the user
+      does, what they see, what persists. Without it, "done" is a matter of
+      opinion. It becomes the acceptance criteria.
     default_text: "Loading the app in a browser shows the main view; submitting the primary form persists the data and re-renders the view with the new item; reloading the page shows the persisted state."
     default_strategy: >-
       Describe the key user flows that must work end to end in a browser: what
@@ -82,6 +160,10 @@ slots:
     required: false
     priority: 7
     question_hint: "What are the entities a user views or edits, and what fields does each carry?"
+    why_this_matters: >-
+      The entities a user views or edits and the fields each carries. An agent
+      needs this to design the database and the forms around it. Use only what
+      the idea names, plus an id.
     default_text: "One or two entities implied by the idea, each with the fields the idea names plus an id and a created timestamp, stored in SQLite or a JSON file. No user or account entity."
     default_strategy: >-
       List each entity a user views or edits and the fields it carries, with
@@ -94,6 +176,10 @@ slots:
     required: false
     priority: 8
     question_hint: "What is the full list of pages/routes, what does each show, and what does each form submit?"
+    why_this_matters: >-
+      The full list of routes and screens, what each shows, and what each form
+      submits and where. Listing them all — not one example — is what lets an
+      agent build the app route by route.
     default_text: "Every page the idea implies, each as a route with what it displays and what its form submits — typically a list view, a detail view, and a create/edit form. Server-rendered; no client-side routing."
     default_strategy: >-
       Enumerate every route/screen. One line each: what it shows and what its
@@ -105,6 +191,10 @@ slots:
     required: false
     priority: 9
     question_hint: "What happens on an invalid form submission, a missing record, or a server error?"
+    why_this_matters: >-
+      What the user sees on an invalid form, a request for a missing record, and
+      an unexpected server error. Deciding this up front stops an agent from
+      either leaking stack traces or building an elaborate error framework.
     default_text: "An invalid form re-renders the page with the entered values kept and the errors shown inline; a missing record shows a 404 page; a server error shows a plain error page without a stack trace."
     default_strategy: >-
       State the behaviour on an invalid form submission (re-render with errors),

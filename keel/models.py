@@ -47,6 +47,27 @@ Section = Literal[
 ]
 
 
+class SlotChoice(BaseModel):
+    """One hand-written option for a slot with a small, known answer space.
+
+    Written by hand in the template YAML — never generated — so it is stable and
+    costs no LLM call. Every field is phrased in outcomes, not terminology.
+    """
+
+    label: str
+    """The short option text a non-technical user picks from."""
+    plain_language: str
+    """A one-line gloss of what the option means in plain words."""
+    tradeoff: str
+    """One line on what this option costs or assumes versus the alternatives."""
+    value: str = ""
+    """The finished spec line written to the slot when this option is chosen.
+    Falls back to ``plain_language`` when empty."""
+
+    def as_slot_value(self) -> str:
+        return (self.value or self.plain_language).strip()
+
+
 class SlotDef(BaseModel):
     """One dimension a prompt must pin down, loaded from a template YAML file."""
 
@@ -55,6 +76,10 @@ class SlotDef(BaseModel):
     label: str
     question_hint: str
     """Static fallback question, shown verbatim when the LLM is unavailable."""
+    why_this_matters: str = ""
+    """Plain-language, hand-written: what the question is really asking and what
+    changes downstream depending on the answer. Static — no LLM call, no
+    variability. Shown under every question in a collapsed expander (spec A2)."""
     default_text: str
     """Short, concrete, human-readable fallback answer. May appear in output."""
     default_strategy: str
@@ -63,6 +88,14 @@ class SlotDef(BaseModel):
     NEVER rendered into the output document. Only ``default_text`` or an
     LLM-generated string may become a slot's value.
     """
+    choices: list[SlotChoice] = Field(default_factory=list)
+    """Hand-written options for a slot with a small, known answer space
+    (``runtime``, ``scale``, ``constraints``, ``auth_model``, ``seed_data``).
+    Empty for slots with a genuinely open answer space, which stay free-text."""
+    skip_if: Optional[str] = None
+    """A human-readable condition (interpreted by :mod:`keel.engine`) under which
+    this slot is suppressed entirely — e.g. ``auth_model`` when the non-goals
+    already exclude authentication."""
     required: bool = True
     priority: int = 100
 

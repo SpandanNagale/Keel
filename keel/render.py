@@ -134,9 +134,19 @@ How to write it:
   "open_questions" yourself — that section is rebuilt mechanically.
 - Do NOT invent specifics the developer did not supply. No made-up numbers, versions, quotas, \
   latencies, request rates, or product names. If no traffic figure was given, write "low, \
-  single-instance traffic" — not "0.3 requests/second". This is a hard rule.
+  single-instance traffic" — not "0.3 requests/second". This is a hard rule. A plausible \
+  invented number is worse than a qualitative phrase, because an agent treats it as a \
+  requirement — never state a capacity, throughput, or volume figure that no answer supports.
+- Architectural shape is in scope and often the most useful thing you can state: \
+  server-rendered pages vs a single-page app, one file vs a database, sessions vs tokens, \
+  synchronous vs queued. Name the shape and, in one clause, its trade-off. Do NOT name a \
+  specific library, framework version, or package as a requirement unless the developer did — \
+  library health sits past your knowledge cutoff and a version pin is a hallucination surface.
 - Never emit a credential, secret, token, password, or key, even as an example. Use a \
-  placeholder such as "the JWT signing secret, read from the JWT_SECRET environment variable".
+  placeholder such as "the JWT signing secret, read from the JWT_SECRET environment variable". \
+  Never state an authentication algorithm, hashing scheme, iteration count, or token lifetime \
+  the developer did not supply — record the policy ("password login with server-side sessions") \
+  and leave the parameters to implementation.
 - "open_questions": a markdown bullet list of dimensions the developer genuinely left \
   unspecified. Do NOT put contradictions here — they are detected and recorded separately. \
   If there is genuinely nothing open, write exactly: \

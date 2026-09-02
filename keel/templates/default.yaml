@@ -11,6 +11,11 @@ slots:
     required: true
     priority: 1
     question_hint: "What goes in, what comes out, and in what format?"
+    why_this_matters: >-
+      This pins down exactly what the tool takes in and what it produces — file
+      formats, field names, the shape of a request and a response. An agent
+      builds everything else in the spec around this, so a vague answer here
+      makes the rest vague too.
     default_text: "Reads the local files or inputs named in the idea and writes a single structured output file (JSON or plain text) alongside them."
     default_strategy: >-
       State the most literal input/output pair the idea implies. Name concrete
@@ -23,11 +28,28 @@ slots:
     required: true
     priority: 2
     question_hint: "Where does this run — a one-off CLI command, a cron job, a long-running server, a notebook, or interactively?"
+    why_this_matters: >-
+      Where and how the code runs decides its whole shape: a script you run by
+      hand is written very differently from an always-on service. It also
+      decides what infrastructure, if any, you have to set up and keep running.
     default_text: "A one-off script run manually from the developer's machine."
     default_strategy: >-
       Pick the single simplest runtime the idea implies (manual local script
       unless it mentions scheduling or serving). One sentence. Do not list
       alternatives.
+    choices:
+      - label: "A one-off script"
+        plain_language: "You run it by hand from your own machine when you need it."
+        tradeoff: "Nothing to deploy or keep running; you have to remember to run it."
+        value: "A one-off script run manually from the developer's machine; nothing scheduled or deployed."
+      - label: "A scheduled job"
+        plain_language: "It runs itself on a timetable, without anyone starting it."
+        tradeoff: "Runs unattended, but needs an always-on machine to run it on."
+        value: "Runs on a schedule (cron or an equivalent task scheduler) on an always-on host; no interactive use."
+      - label: "A long-running service"
+        plain_language: "It stays up and reacts to requests or events as they come in."
+        tradeoff: "Most flexible, but the most to build, deploy, and keep healthy."
+        value: "A long-running service process that stays up and handles requests or events; deployed to a host that keeps it running."
 
   - name: scale
     section: context
@@ -35,11 +57,29 @@ slots:
     required: true
     priority: 3
     question_hint: "What volume, frequency, and data size should this handle?"
+    why_this_matters: >-
+      How much data and how often decides whether a simple in-memory approach is
+      safe or whether you need batching, streaming, or a database. Guessing high
+      wastes effort; guessing low forces a rebuild. A rough order of magnitude
+      is enough.
     default_text: "A single user running it occasionally over a small local dataset — tens to low thousands of items."
     default_strategy: >-
       Give a concrete order-of-magnitude estimate for volume, frequency, and
       data size, based on what the idea implies. One sentence. Assume small and
       single-user unless the idea says otherwise.
+    choices:
+      - label: "A small run"
+        plain_language: "Up to a few thousand items at a time, run occasionally."
+        tradeoff: "Everything fits in memory; no need to stream, batch, or add a database."
+        value: "A single user running it occasionally over a small dataset — tens to a few thousand items, all comfortably in memory."
+      - label: "A large run"
+        plain_language: "Hundreds of thousands of items — too much to hold in memory at once."
+        tradeoff: "Must process in batches or as a stream; slower to build but won't run out of memory."
+        value: "Processes hundreds of thousands of items per run — too large for memory, so handled in batches or as a stream."
+      - label: "Ongoing and growing"
+        plain_language: "Millions of items, or more arriving every day."
+        tradeoff: "Needs incremental processing and a durable store; a noticeably bigger build."
+        value: "Millions of items and growing over time; processed incrementally against a durable store rather than reprocessed whole."
 
   - name: constraints
     section: constraints
@@ -47,12 +87,30 @@ slots:
     required: true
     priority: 4
     question_hint: "Any hard limits — offline only, no paid APIs, a required language, existing dependencies to reuse or avoid?"
+    why_this_matters: >-
+      Hard limits — offline only, no paid services, a required language, tools
+      you must reuse or avoid — rule options in or out before any design work.
+      An agent that does not know them may pick something you cannot use.
+      "No unusual limits" is itself a useful answer.
     default_text: "No paid APIs, minimal network use, Python with only widely-used libraries, and no new services to stand up."
     default_strategy: >-
       List the hard limits the idea implies as short phrases in one
       sentence (language, offline, no paid APIs, dependency limits). If the idea
       implies none, state the conservative default: Python, no paid APIs, no new
       infrastructure.
+    choices:
+      - label: "Keep it minimal"
+        plain_language: "Standard library plus one or two well-known packages, no paid services, works offline."
+        tradeoff: "Easiest to install and inspect; you write more of it yourself."
+        value: "Standard library plus one or two widely-used packages only; no paid services; runs offline; no new infrastructure to stand up."
+      - label: "Use a mainstream stack"
+        plain_language: "A widely-used framework and its usual companion libraries are fine."
+        tradeoff: "Faster to build; more dependencies to keep updated."
+        value: "A mainstream framework and its common companion libraries are acceptable; still no paid services and nothing exotic."
+      - label: "No hard limits"
+        plain_language: "Any reputable open-source library is fine, and free hosted services are acceptable."
+        tradeoff: "Fewest limits on the build; more moving parts and some lock-in."
+        value: "No hard technical constraints beyond good sense — any reputable open-source library, and free-tier hosted services, may be used."
 
   - name: non_goals
     section: non_goals
@@ -60,6 +118,11 @@ slots:
     required: true
     priority: 5
     question_hint: "What should the agent explicitly NOT build — auth, a database, a UI, a config system, a test suite, packaging?"
+    why_this_matters: >-
+      Naming what NOT to build stops an agent gold-plating — adding accounts, a
+      settings system, a plugin architecture, or packaging you never asked for.
+      Each non-goal should be a concrete thing an agent might otherwise build
+      unprompted.
     default_text: "No authentication, no database, no web or desktop UI, no packaging for distribution, and no exhaustive test suite — just the working core."
     default_strategy: >-
       List 3-5 concrete things the agent should NOT build, drawn from the usual
@@ -72,6 +135,10 @@ slots:
     required: true
     priority: 6
     question_hint: "How will you know it works — what is the observable signal?"
+    why_this_matters: >-
+      This is the observable signal that the work is finished — a command to run
+      and what its output should look like. Without it, "done" is a matter of
+      opinion. It becomes the acceptance criteria in the spec.
     default_text: "Running it once against real or sample input produces the expected output with no errors, and the output is spot-checked by hand."
     default_strategy: >-
       Describe one concrete, observable check that proves the tool works — a
@@ -83,6 +150,10 @@ slots:
     required: false
     priority: 7
     question_hint: "What are the main entities and the fields each one carries?"
+    why_this_matters: >-
+      The core records and the fields each carries. An agent needs the entities
+      to design storage and the interface around them. Keep it to what the idea
+      actually implies — no invented schema.
     default_text: "One core record type holding the fields named or implied by the idea, kept in memory or a single local file; no relational schema and no migrations."
     default_strategy: >-
       Name the one or two core entities the idea implies and list the concrete
@@ -95,6 +166,10 @@ slots:
     required: false
     priority: 8
     question_hint: "What are the exact functions, commands, or screens, and what does each take and return?"
+    why_this_matters: >-
+      The concrete surface: every command, function, or screen, with what each
+      takes and returns. Listing them all — not one example — is what turns a
+      vague idea into something an agent can build piece by piece.
     default_text: "A single entry point — one function or one command — that takes the input the idea describes and returns the output it describes. No other surface."
     default_strategy: >-
       Enumerate every function, command, endpoint, or screen the idea implies.
@@ -107,6 +182,11 @@ slots:
     required: false
     priority: 9
     question_hint: "What should happen on bad input, a missing file, or a partial failure?"
+    why_this_matters: >-
+      What happens on bad input, a missing file, or a failure partway through.
+      Deciding this up front stops an agent from either ignoring errors or
+      inventing an elaborate scheme. Name the observable behaviour — the
+      message, the exit code, whether partial output is left behind.
     default_text: "Invalid or missing input stops with a clear message and a non-zero exit; a partial failure halts and reports what completed, leaving no half-written output behind."
     default_strategy: >-
       State what happens on bad input, on a missing or unreadable resource, and

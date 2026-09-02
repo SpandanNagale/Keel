@@ -11,6 +11,10 @@ slots:
     required: true
     priority: 1
     question_hint: "What input does the command take (arguments, files, stdin) and what does it print or write?"
+    why_this_matters: >-
+      This pins down exactly what the command reads (arguments, files, piped
+      input) and what it writes (stdout, a file, an exit code). An agent builds
+      the whole tool around this, so a vague answer here makes the rest vague.
     default_text: "Takes one or more file paths as arguments (or reads stdin when piped) and writes results to stdout, with an optional --output flag to write a file instead."
     default_strategy: >-
       Describe the argument/stdin input and the stdout/file output the idea
@@ -23,10 +27,27 @@ slots:
     required: true
     priority: 2
     question_hint: "Is this a one-shot command, or is it wrapped in a cron job or a shell pipeline you care about?"
+    why_this_matters: >-
+      How the command is run shapes it: a tool you type by hand can prompt and
+      print freely, one in a pipeline must read stdin and write clean stdout,
+      and a scheduled one must run unattended with good exit codes.
     default_text: "A one-shot command run manually from a terminal; safe to drop into a shell pipeline but not scheduled."
     default_strategy: >-
       State whether the command is run manually, scheduled, or used inside a
       pipeline, based on the idea. One sentence. Default to manual invocation.
+    choices:
+      - label: "Run by hand"
+        plain_language: "You type the command in a terminal when you need it."
+        tradeoff: "Nothing to schedule or host; you have to remember to run it."
+        value: "A one-shot command run manually from a terminal; not scheduled."
+      - label: "Part of a shell pipeline"
+        plain_language: "Other commands pipe data into it and read its output."
+        tradeoff: "Composes well with other tools, but must read stdin and write only results to stdout."
+        value: "Designed to sit in a shell pipeline: reads stdin, writes only results to stdout, keeps messages on stderr."
+      - label: "A scheduled job"
+        plain_language: "A cron entry or task scheduler runs it on a timetable."
+        tradeoff: "Runs unattended, but needs an always-on machine and reliable exit codes."
+        value: "Run on a schedule (cron or task scheduler) on an always-on host; unattended, with a non-zero exit on failure."
 
   - name: scale
     section: context
@@ -34,10 +55,27 @@ slots:
     required: true
     priority: 3
     question_hint: "Roughly how much data does a single invocation process?"
+    why_this_matters: >-
+      How much one run handles decides whether it can load everything into
+      memory or must stream. Guessing high wastes effort; guessing low means a
+      rewrite when a real input arrives. A rough size is enough.
     default_text: "A single local run over a small-to-moderate input — up to a few thousand lines or files."
     default_strategy: >-
       Give an order-of-magnitude size for one invocation (lines, files, bytes),
       based on the idea. One sentence. Assume a small local run.
+    choices:
+      - label: "A small input"
+        plain_language: "Up to a few thousand lines or files per run."
+        tradeoff: "Can read everything into memory; simplest to write."
+        value: "Up to a few thousand lines or files per invocation — small enough to hold in memory."
+      - label: "A large input"
+        plain_language: "Hundreds of thousands of lines, or files too big for memory."
+        tradeoff: "Must stream line by line or in chunks; a bit more care to write."
+        value: "Hundreds of thousands of lines, or files larger than memory — processed as a stream rather than loaded whole."
+      - label: "Whatever is piped in"
+        plain_language: "You don't know the size; it depends on what feeds the command."
+        tradeoff: "Forces streaming and steady memory use regardless of input size."
+        value: "Input size is unbounded and unknown ahead of time; the command streams and keeps memory flat regardless."
 
   - name: constraints
     section: constraints
@@ -45,11 +83,28 @@ slots:
     required: true
     priority: 4
     question_hint: "Any hard limits — offline only, no paid APIs, a required language, existing dependencies to reuse or avoid?"
+    why_this_matters: >-
+      Hard limits — offline only, no paid services, a required language,
+      single-file so it is easy to copy around — rule options in or out before
+      any design. "No unusual limits" is a fine answer too.
     default_text: "Offline-friendly, no paid APIs, standard library plus one or two well-known packages, single-file script if practical."
     default_strategy: >-
       List the hard limits the idea implies (language, offline, dependency
       count, single-file). One sentence. Default to offline, no paid APIs,
       minimal dependencies.
+    choices:
+      - label: "Single file, standard library"
+        plain_language: "One script file, no dependencies to install, works offline."
+        tradeoff: "Trivial to copy and run anywhere; you write more of it by hand."
+        value: "A single-file script using only the standard library; no dependencies to install; runs offline."
+      - label: "A few well-known packages"
+        plain_language: "Standard library plus one or two popular packages, installed the usual way."
+        tradeoff: "Less code to write; needs an install step and a dependency list."
+        value: "Standard library plus one or two widely-used packages, installed via the usual package manager; no paid services."
+      - label: "No hard limits"
+        plain_language: "Any reputable library is fine, and free hosted services are acceptable."
+        tradeoff: "Fewest limits on the build; more to install and keep current."
+        value: "No hard constraints beyond good sense — any reputable open-source library and free-tier services may be used."
 
   - name: non_goals
     section: non_goals
@@ -57,6 +112,10 @@ slots:
     required: true
     priority: 5
     question_hint: "What should the agent explicitly NOT build — a GUI, a daemon/server mode, a config file format, a plugin system, distribution packaging?"
+    why_this_matters: >-
+      Naming what NOT to build stops an agent adding a GUI, a daemon mode, a
+      config-file format, or a plugin system you never asked for. Each non-goal
+      should be a concrete thing an agent might otherwise build unprompted.
     default_text: "No GUI, no daemon or server mode, no config file format, no plugin system, and no packaging for distribution — just the one command."
     default_strategy: >-
       List 3-5 things the agent should NOT build for a CLI tool (GUI, server
@@ -69,6 +128,10 @@ slots:
     required: true
     priority: 6
     question_hint: "How will you know the command works — what is the observable signal?"
+    why_this_matters: >-
+      The observable signal the tool works — a command line to run, the output
+      it should print, and the exit code. Without it, "done" is subjective. It
+      becomes the acceptance criteria.
     default_text: "Running the command against a sample input prints the documented output and exits 0; a bad input prints a clear error to stderr and exits non-zero."
     default_strategy: >-
       Describe one concrete terminal check: the command line to run, the
@@ -81,6 +144,10 @@ slots:
     required: false
     priority: 7
     question_hint: "What does one record the tool reads or writes look like — which fields?"
+    why_this_matters: >-
+      The shape of one input record and one output record — the fields and
+      rough types. An agent needs this to parse input and format output
+      correctly. Use only what the idea names.
     default_text: "Plain lines or rows carrying the fields the idea names; no schema beyond what the input file already has."
     default_strategy: >-
       Describe the shape of one input record and one output record — the fields
@@ -92,6 +159,10 @@ slots:
     required: false
     priority: 8
     question_hint: "What are the exact subcommands, positional arguments, and flags, and what does each do?"
+    why_this_matters: >-
+      Every subcommand, positional argument, and flag, with what each does.
+      Listing them all — not one example — is what lets an agent build the
+      argument parser and behaviour precisely.
     default_text: "A single command with one or two positional arguments and a small set of flags (for example --output, --dry-run); no subcommands."
     default_strategy: >-
       Enumerate every subcommand, positional argument, and flag the idea
@@ -104,6 +175,11 @@ slots:
     required: false
     priority: 9
     question_hint: "What happens on a bad argument, a missing or unreadable file, or a failure partway through?"
+    why_this_matters: >-
+      What happens on a bad argument, a missing file, or a failure partway
+      through — the stderr message, the exit code, and whether partial output is
+      left behind. Deciding this up front avoids both silent failures and
+      over-engineered recovery.
     default_text: "A bad argument or missing file prints a clear message to stderr and exits non-zero; a mid-run failure stops and reports progress so far, without leaving partly-written output."
     default_strategy: >-
       State the behaviour on a bad argument, a missing or unreadable file, and a

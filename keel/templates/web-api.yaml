@@ -11,6 +11,10 @@ slots:
     required: true
     priority: 1
     question_hint: "What routes and methods should exist, and what does each one accept and return?"
+    why_this_matters: >-
+      This pins down the routes, the JSON a client sends, and the JSON it gets
+      back. An agent builds the whole service around this, so a vague answer
+      here makes every endpoint vague.
     default_text: "A minimal set of endpoints implied by the idea — typically one POST to submit input and one GET to retrieve a result. Requests and responses are JSON; every response carries a status field alongside the result payload."
     default_strategy: >-
       List the specific routes (method + path) the idea implies, and for each,
@@ -23,10 +27,27 @@ slots:
     required: true
     priority: 2
     question_hint: "How is this served — locally via the framework's dev server, or deployed to something specific?"
+    why_this_matters: >-
+      How the service is run decides how much you can lean on it: a dev server
+      is fine for local work but must not face clients, one deployed instance
+      handles steady traffic, and managed hosting scales without a rebuild.
     default_text: "Runs locally via the framework's built-in dev server (for example uvicorn); no specific deployment target."
     default_strategy: >-
       State how the service is run and whether a deployment target is named,
       based on the idea. One sentence. Default to the local dev server.
+    choices:
+      - label: "Local dev server"
+        plain_language: "Runs from the framework's built-in server on your machine."
+        tradeoff: "Nothing to deploy; not safe to expose to real clients."
+        value: "Runs locally via the framework's development server; no deployment target. For development and testing only."
+      - label: "One deployed instance"
+        plain_language: "A single always-on instance behind a real production server, restarted automatically."
+        tradeoff: "A bit more setup; handles steady real traffic without babysitting."
+        value: "A single deployed instance behind a production ASGI/WSGI server under a process manager that restarts it on failure; one instance, no load balancer."
+      - label: "Managed hosting"
+        plain_language: "Runs on a hosting platform that can start more copies as request volume grows."
+        tradeoff: "More setup up front; scales without a rewrite later."
+        value: "Deployed as a stateless container to a managed platform that can run multiple copies behind a load balancer; no state kept in process memory."
 
   - name: scale
     section: context
@@ -34,11 +55,29 @@ slots:
     required: true
     priority: 3
     question_hint: "Expected request volume and concurrency — a few requests a day, or real production traffic?"
+    why_this_matters: >-
+      Request volume and concurrency decide whether in-memory or single-file
+      storage is safe, or whether you need a real database and multiple
+      instances. Guessing high wastes effort; guessing low forces a rewrite. A
+      rough requests-per-second figure is enough.
     default_text: "Low traffic — single-digit requests per second at most, one instance, no horizontal scaling or load balancing."
     default_strategy: >-
       Give expected requests per second, concurrency, and instance count, based
       on the idea. One sentence. Assume low single-instance traffic unless the
       idea says otherwise.
+    choices:
+      - label: "Barely any"
+        plain_language: "A handful of requests a day, from you or one script."
+        tradeoff: "In-memory or single-file storage is fine; one instance is plenty."
+        value: "A few requests per day from a single caller; one instance; in-memory or single-file storage."
+      - label: "Light steady traffic"
+        plain_language: "A few requests per second at busy times, from a small set of clients."
+        tradeoff: "Needs a real database and a production server, but still one instance."
+        value: "Up to a few requests per second with modest concurrency; one instance backed by a client/server database."
+      - label: "Production traffic"
+        plain_language: "Sustained tens or hundreds of requests per second from many clients."
+        tradeoff: "Needs multiple instances, a managed database, and capacity planning — a bigger build."
+        value: "Sustained tens to hundreds of requests per second; multiple stateless instances behind a load balancer, a managed database, and a caching layer are in scope."
 
   - name: constraints
     section: constraints
@@ -46,11 +85,32 @@ slots:
     required: true
     priority: 4
     question_hint: "Any hard limits — a required framework or language, no paid APIs, no database, existing dependencies?"
+    why_this_matters: >-
+      Hard limits — a required language or framework, no paid services, no
+      database server, tokens vs server-side sessions — rule options in or out
+      before design. "No unusual limits" is a fine answer.
     default_text: "Python with FastAPI, no paid APIs, in-memory or single-file storage rather than a database server, and no auth layer."
     default_strategy: >-
       List the hard limits the idea implies (framework, language, storage, paid
       APIs, auth). One or two sentences. Default to Python + FastAPI with
       in-memory storage.
+    choices:
+      - label: "Keep it minimal"
+        plain_language: "A mainstream web framework and single-file or in-memory storage; no paid services."
+        tradeoff: "Fast to build; not durable across restarts unless you add a real store."
+        value: "A mainstream web framework with in-memory or single-file storage; no database server; no paid services."
+      - label: "Framework plus a database"
+        plain_language: "A mainstream framework and a real database server are both fine."
+        tradeoff: "Durable and query-friendly; one more service to run and migrate."
+        value: "A mainstream web framework plus a client/server database (PostgreSQL or equivalent); no paid third-party APIs."
+      - label: "Must fit an existing stack"
+        plain_language: "It has to use the language, framework, or database already named in your answer."
+        tradeoff: "Consistent with what you run; constrained by those choices."
+        value: "Constrained to the language, framework, and datastore already in use (as named); no new runtime dependencies beyond that stack."
+      - label: "No hard limits"
+        plain_language: "Any reputable library is fine, and free-tier hosted services are acceptable."
+        tradeoff: "Fewest limits on the build; more moving parts and some lock-in."
+        value: "No hard constraints beyond good sense — any reputable open-source library and free-tier services may be used."
 
   - name: non_goals
     section: non_goals
@@ -58,6 +118,11 @@ slots:
     required: true
     priority: 5
     question_hint: "What should the agent explicitly NOT build — authentication, a persistent database, rate limiting, a frontend, deployment config?"
+    why_this_matters: >-
+      Naming what NOT to build stops an agent adding rate limiting, API
+      versioning, a frontend, or deployment config you never asked for. Each
+      non-goal should be a concrete thing an agent might otherwise build
+      unprompted.
     default_text: "No authentication or user accounts, no persistent database, no rate limiting, no frontend, and no deployment or CI config — just the endpoints."
     default_strategy: >-
       List 3-5 things the agent should NOT build for an API (auth, database,
@@ -70,6 +135,10 @@ slots:
     required: true
     priority: 6
     question_hint: "How will you know the API works — a manual curl, a smoke test, specific responses to check?"
+    why_this_matters: >-
+      The observable signal the API works — the request to send to each
+      endpoint and the response shape and status expected back. Without it,
+      "done" is subjective. It becomes the acceptance criteria.
     default_text: "Starting the server and hitting each endpoint with a sample request (curl or the framework's test client) returns the documented response shape with a 2xx status."
     default_strategy: >-
       Describe one concrete check: the request to send to each endpoint and the
@@ -81,6 +150,10 @@ slots:
     required: false
     priority: 7
     question_hint: "What are the resources the API exposes, and what fields does each carry?"
+    why_this_matters: >-
+      The resources the API exposes and the fields each carries, with rough JSON
+      types. An agent needs this to shape request validation, responses, and
+      storage. Use only what the idea names, plus an id.
     default_text: "One or two resources implied by the idea, each a flat JSON object with the fields the idea names plus an id and a created timestamp. No relational joins."
     default_strategy: >-
       List each resource the API exposes and the fields it carries, with rough
@@ -93,6 +166,10 @@ slots:
     required: false
     priority: 8
     question_hint: "What is the complete list of routes — method and path — and the request and response body of each?"
+    why_this_matters: >-
+      The complete list of routes as method + path, each with its request and
+      success response body. Listing them all — not one example — is what lets
+      an agent build the service endpoint by endpoint.
     default_text: "The full set of routes the idea implies, each as method + path with its JSON request body and its JSON success response. Typically a create (POST), a fetch (GET by id), and a list (GET)."
     default_strategy: >-
       Enumerate every route as method + path. For each, give the request body
@@ -105,6 +182,10 @@ slots:
     required: false
     priority: 9
     question_hint: "What does the API return on a malformed body, a missing resource, or an unexpected server error?"
+    why_this_matters: >-
+      The status code and body for a malformed request, a not-found resource,
+      and an unexpected server error. Deciding this up front stops an agent from
+      leaking stack traces or inventing an elaborate error scheme.
     default_text: "A malformed or invalid body returns 400 with a JSON error object naming the bad fields; a missing resource returns 404; an unexpected failure returns 500 with a generic message and no stack trace in the body."
     default_strategy: >-
       State the status code and response body for a malformed request, a
