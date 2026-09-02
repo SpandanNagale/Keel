@@ -172,20 +172,37 @@ def slugify(text: str, *, max_len: int = 40) -> str:
 # Session lifecycle
 # --------------------------------------------------------------------------- #
 def start_session(
-    prompt: str, template_name: str, *, created_date: str, depth: str = "standard"
+    prompt: str,
+    template_name: str,
+    *,
+    created_date: str,
+    depth: str = "standard",
+    mode: str = "technical",
 ) -> SessionState:
-    """Build an empty session. Makes no LLM call."""
+    """Build an empty session. Makes no LLM call.
+
+    ``mode`` defaults to ``"technical"`` here so the engine stays mode-neutral
+    and older callers are unchanged; the app passes ``mode="guided"`` for new
+    sessions, which is the product default (spec A5)."""
     return SessionState(
         original_prompt=prompt.strip(),
         template_name=template_name,
         created_date=created_date,
+        mode=mode if mode in ("guided", "technical") else "technical",
         depth=depth if depth in DEPTH_OPTIONAL else "standard",
     )
 
 
 def askable_slots(session: SessionState, template: Template) -> list[SlotDef]:
-    """The slots this session's depth puts in play to ASK about: the required
-    six, plus the first N optional slots by priority (N from the depth)."""
+    """The slots this session puts in play to ASK about.
+
+    Guided mode asks only the required (core) slots and ignores the depth
+    selector entirely — everything else is defaulted, and the closed-answer
+    ones become ``keel_decided``. Technical mode keeps the depth-driven set:
+    the required slots plus the first N optional slots by priority."""
+    if session.mode == "guided":
+        return template.required_slots()
+
     n_optional = DEPTH_OPTIONAL.get(session.depth, DEPTH_OPTIONAL["standard"])
     optional = sorted(
         (s for s in template.slots if not s.required),

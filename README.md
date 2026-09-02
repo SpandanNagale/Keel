@@ -83,11 +83,22 @@ over the slot list, never "the model decides it has asked enough."
 | `interfaces` | The concrete surface: endpoints, commands, screens, functions | optional |
 | `error_handling` | What happens on bad input, failure, or partial success | optional |
 
-The six core slots are always asked. The three optional slots are governed by a
-**Depth** selector on the start screen: `Quick` asks the six core, `Standard`
-(default) adds `data_model` and `interfaces`, `Thorough` adds `error_handling`.
-No session asks more than **8** questions; any slot not asked is filled from the
-answers already given (one LLM call), never left blank.
+An **audience mode** toggle on the start screen decides how questions are asked:
+
+- **Guided** (default) assumes no software background. It asks only the six core
+  slots, ignores the depth selector, phrases `runtime` / `scale` / `constraints`
+  as plain-language multiple choice (plus "Something else" and "I'm not sure"),
+  and shows a *Why does this matter?* note under every question. Everything not
+  asked is defaulted — closed-answer slots become `keel_decided`, open ones
+  `llm_default`.
+- **Technical** keeps today's terse free-text questions and the **Depth**
+  selector: `Quick` asks the six core, `Standard` (default) adds `data_model` and
+  `interfaces`, `Thorough` adds `error_handling`.
+
+Every question also offers **Decide for me** (records the value as `keel_decided`
+with a reason) alongside **Skip this** (leaves it open). No session asks more than
+**8** questions; any slot not asked is filled from the answers already given (one
+LLM call), never left blank.
 
 Slots live in YAML under [`keel/templates/`](keel/templates/) — `default`, `cli`,
 `data-pipeline`, `web-api`, `web-app`. Templates differ in question phrasing, priority,
@@ -95,10 +106,12 @@ and section mapping (`web-app` is for browser-facing apps and never lists a UI a
 non-goal; `web-api` is reserved for HTTP services). Keel picks one by keyword heuristic on
 your idea, preferring `default` when the prompt is ambiguous; a dropdown lets you override.
 
-Each slot carries a `default_text` (a concrete human-readable fallback answer) and a
+Each slot carries a `default_text` (a concrete human-readable fallback answer), a
 `default_strategy` (an instruction used *only* inside the LLM prompt to generate a
-context-aware default). `default_strategy` never appears in rendered output — there is a
-test that asserts it.
+context-aware default; never rendered — there is a test that asserts it), a hand-written
+`why_this_matters` note, and — for the closed-answer slots — a hand-written `choices`
+list (`label`, `plain_language`, `tradeoff`). The choice and why text are static: no
+LLM call, identical between runs.
 
 ## Architecture
 

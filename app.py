@@ -204,7 +204,7 @@ def _generate_pending_question(byok: str, byok_provider: str) -> None:
 
 
 def _start(
-    prompt: str, template_name: str, depth: str, byok: str, byok_provider: str
+    prompt: str, template_name: str, depth: str, mode: str, byok: str, byok_provider: str
 ) -> None:
     prompt = prompt.strip()
     if not prompt or len(prompt) > MAX_PROMPT_CHARS:
@@ -214,7 +214,8 @@ def _start(
         return
 
     session = engine.start_session(
-        prompt, template_name, created_date=date.today().isoformat(), depth=depth
+        prompt, template_name, created_date=date.today().isoformat(),
+        depth=depth, mode=mode,
     )
     template = _load_template(template_name)
 
@@ -252,7 +253,7 @@ def _begin_questions(session, byok: str, byok_provider: str, *, extract: bool) -
 
 
 def _fetch_reference(
-    prompt: str, template_name: str, depth: str, ref_input: str,
+    prompt: str, template_name: str, depth: str, mode: str, ref_input: str,
     byok: str, byok_provider: str,
 ) -> None:
     """Stage a session for reference confirmation. A URL goes straight to the
@@ -280,7 +281,8 @@ def _fetch_reference(
         return
 
     session = engine.start_session(
-        prompt, template_name, created_date=date.today().isoformat(), depth=depth
+        prompt, template_name, created_date=date.today().isoformat(),
+        depth=depth, mode=mode,
     )
     ref_input = ref_input.strip()
 
@@ -365,7 +367,8 @@ def _resolve_reference_pick(url: str, byok: str, byok_provider: str) -> None:
 
 
 def _fetch_reference_image(
-    prompt: str, template_name: str, depth: str, uploaded, byok: str, byok_provider: str
+    prompt: str, template_name: str, depth: str, mode: str, uploaded,
+    byok: str, byok_provider: str,
 ) -> None:
     """Mode C: read a screenshot / sketch with a vision model and stage the
     session with candidate slot values for confirmation."""
@@ -393,7 +396,8 @@ def _fetch_reference_image(
         return
 
     session = engine.start_session(
-        prompt, template_name, created_date=date.today().isoformat(), depth=depth
+        prompt, template_name, created_date=date.today().isoformat(),
+        depth=depth, mode=mode,
     )
     session.reference = ReferenceState(mode="image", query=getattr(uploaded, "name", "image"))
     _record_shared_call()
@@ -529,6 +533,23 @@ def _skip(byok: str, byok_provider: str) -> None:
     if not pq or not session:
         return
     engine.skip_slot(session, pq["slot"])
+    st.session_state.pending_q = None
+    _advance_after(byok, byok_provider)
+
+
+def _decide(text: str, byok: str, byok_provider: str) -> None:
+    """"Decide for me": Keel keeps the recommended value but records that the
+    user delegated the choice, with the one-line reason and revisit condition
+    that came back on the same question call (no extra LLM call)."""
+    pq = st.session_state.pending_q
+    session = st.session_state.session
+    if not pq or not session:
+        return
+    value = (text or "").strip() or pq["recommended"]
+    engine.decide_for_me(
+        session, pq["slot"], value,
+        rationale=pq.get("rationale", ""), revisit_if=pq.get("revisit_if", ""),
+    )
     st.session_state.pending_q = None
     _advance_after(byok, byok_provider)
 
@@ -729,12 +750,32 @@ def _view_intro(byok: str, byok_provider: str) -> None:
         "about what it leaves unstated, then hands you a structured markdown spec "
         "to paste into a coding agent."
     )
+
+    mode_label = st.radio(
+        "How would you like the questions?",
+        ["Guided", "Technical"],
+        index=0,
+        horizontal=True,
+        key="mode_choice",
+        help="Guided assumes no software background: multiple-choice questions in "
+        "plain language, six questions, and aggressive defaulting. Technical uses "
+        "terse free-text questions and the full slot set.",
+    )
+    mode = {"Guided": "guided", "Technical": "technical"}[mode_label]
+    if mode == "guided":
+        st.caption(
+            "Guided mode — pick an option, or press **Decide for me** for anything "
+            "you're unsure about. Keel records what it chose and why."
+        )
+
     prompt = st.text_area(
         "Your project idea",
         key="idea_input",
         max_chars=MAX_PROMPT_CHARS,
         height=90,
-        placeholder="scrape my bookmarks and cluster them by topic",
+        placeholder="a website where people can book rooms at my hotel"
+        if mode == "guided"
+        else "scrape my bookmarks and cluster them by topic",
     )
 
     auto = engine.select_template(prompt) if prompt.strip() else "default"
@@ -749,17 +790,22 @@ def _view_intro(byok: str, byok_provider: str) -> None:
     if prompt.strip() and choice == auto:
         st.caption(f"Auto-detected: **{auto}**")
 
-    depth_label = st.radio(
-        "Depth",
-        ["Quick", "Standard", "Thorough"],
-        index=1,
-        horizontal=True,
-        key="depth_choice",
-        help="Quick asks the 6 core dimensions. Standard adds the data model and "
-        "interface surface. Thorough also asks about error handling. Slots not "
-        "asked are filled from context, never left blank.",
-    )
-    depth = {"Quick": "quick", "Standard": "standard", "Thorough": "thorough"}[depth_label]
+    if mode == "technical":
+        depth_label = st.radio(
+            "Depth",
+            ["Quick", "Standard", "Thorough"],
+            index=1,
+            horizontal=True,
+            key="depth_choice",
+            help="Quick asks the 6 core dimensions. Standard adds the data model and "
+            "interface surface. Thorough also asks about error handling. Slots not "
+            "asked are filled from context, never left blank.",
+        )
+        depth = {"Quick": "quick", "Standard": "standard", "Thorough": "thorough"}[depth_label]
+    else:
+        # Guided ignores depth entirely — it always asks its six core questions
+        # and defaults the rest (spec A5).
+        depth = "standard"
 
     fc_configured = bool(_secret("FIRECRAWL_API_KEY").strip())
     vision_provider, vision_reason = _vision_provider()
@@ -805,15 +851,23 @@ def _view_intro(byok: str, byok_provider: str) -> None:
     if st.button(start_label, type="primary", key="start_btn", disabled=not prompt.strip()):
         _clear_edit_widgets()
         if use_image:
-            _fetch_reference_image(prompt, choice, depth, ref_image, byok, byok_provider)
+            _fetch_reference_image(prompt, choice, depth, mode, ref_image, byok, byok_provider)
         elif use_url:
-            _fetch_reference(prompt, choice, depth, ref_url, byok, byok_provider)
+            _fetch_reference(prompt, choice, depth, mode, ref_url, byok, byok_provider)
         else:
-            _start(prompt, choice, depth, byok, byok_provider)
+            _start(prompt, choice, depth, mode, byok, byok_provider)
         st.rerun()
 
     if st.session_state.start_error:
         st.warning(st.session_state.start_error)
+
+    with st.expander("About Keel"):
+        st.caption(
+            "Keel turns a vague idea into a structured spec for a coding agent. It "
+            "lowers the barrier to writing one and makes its own choices legible, but "
+            "it cannot replace judgement: this spec is a starting point and benefits "
+            "from review by someone with software experience before you rely on it."
+        )
 
     with st.expander("Resume a saved session"):
         st.caption(
@@ -925,22 +979,70 @@ def _view_questions(byok: str, byok_provider: str) -> None:
     elif session.degraded:
         st.caption("Running in degraded mode — some answers are template defaults.")
 
-    st.markdown(f"### {pq['question']}")
-    answer = st.text_area(
-        "Recommended answer — accept, edit, or skip",
-        value=pq["recommended"],
-        key=f"answer_{pq['slot']}_{session.current_index}",
-        height=120,
-    )
+    template = _load_template(session.template_name)
+    slot = template.slot(pq["slot"])
 
-    c1, c2, c3 = st.columns([2, 1, 2])
+    st.markdown(f"### {pq['question']}")
+    if slot and slot.why_this_matters:
+        with st.expander("Why does this matter?"):
+            st.write(slot.why_this_matters)
+
+    # Guided mode + a slot with a known answer space -> choice-first. Anything
+    # else keeps the free-text box.
+    guided_choices = (
+        session.mode == "guided" and slot is not None and bool(slot.choices)
+    )
+    unsure = False
+    if guided_choices:
+        labels = [c.label for c in slot.choices]
+        options = labels + ["Something else", "I'm not sure"]
+        pick = st.radio(
+            "Pick the closest option",
+            options,
+            key=f"choice_{pq['slot']}_{session.current_index}",
+        )
+        if pick in labels:
+            chosen = slot.choices[labels.index(pick)]
+            st.caption(f"{chosen.plain_language}  \n_Trade-off: {chosen.tradeoff}_")
+            answer = chosen.as_slot_value()
+        elif pick == "Something else":
+            answer = st.text_area(
+                "Describe it in your own words",
+                value="",
+                key=f"answer_{pq['slot']}_{session.current_index}",
+                height=100,
+            )
+        else:  # "I'm not sure"
+            unsure = True
+            answer = ""
+            st.caption(
+                "Keel will choose a sensible default and record what it picked and "
+                "why in the *Decisions Keel made for you* section."
+            )
+    else:
+        answer = st.text_area(
+            "Recommended answer — accept, edit, or skip",
+            value=pq["recommended"],
+            key=f"answer_{pq['slot']}_{session.current_index}",
+            height=120,
+        )
+
+    c1, c2, c3, c4 = st.columns([2, 1, 1, 2])
     if c1.button("Accept & continue", type="primary", key="accept_btn"):
-        _accept(answer, byok, byok_provider)
+        if unsure:
+            _decide(answer, byok, byok_provider)
+        else:
+            _accept(answer, byok, byok_provider)
         st.rerun()
-    if c2.button("Skip this", key="skip_btn"):
+    if c2.button("Decide for me", key="decide_btn",
+                 help="You don't know — let Keel choose and record why."):
+        _decide(answer, byok, byok_provider)
+        st.rerun()
+    if c3.button("Skip this", key="skip_btn",
+                 help="Leave this deliberately open — it goes to Open questions."):
         _skip(byok, byok_provider)
         st.rerun()
-    if c3.button("Skip the rest, use defaults", key="finish_btn"):
+    if c4.button("Skip the rest, use defaults", key="finish_btn"):
         _finish_with_defaults(byok, byok_provider)
         st.rerun()
 
@@ -1114,7 +1216,8 @@ def _review_and_regenerate(byok: str, byok_provider: str) -> None:
     st.markdown(
         " &nbsp; ".join(
             _chip(s) for s in
-            ("extracted", "asked", "reference", "llm_default", "template_default", "skipped")
+            ("extracted", "asked", "reference", "llm_default", "template_default",
+             "keel_decided", "skipped")
         ),
         unsafe_allow_html=True,
     )

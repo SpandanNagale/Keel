@@ -8,6 +8,8 @@ import pytest
 pytest.importorskip("streamlit")
 from streamlit.testing.v1 import AppTest
 
+from keel import engine
+
 
 def _btn(at, label):
     return next(b for b in at.button if b.label == label)
@@ -225,6 +227,8 @@ def test_keel_provider_ollama_runs_a_full_session_with_no_anthropic_key(monkeypa
 
 def test_depth_selector_controls_how_many_questions_are_asked(monkeypatch):
     at = _new_app(monkeypatch, _happy_llm)
+    at.radio(key="mode_choice").set_value("Technical")  # depth is Technical-only now
+    at.run()
     at.text_area(key="idea_input").set_value("a tool to organise my downloads folder")
     at.run()
     at.radio(key="depth_choice").set_value("Quick")
@@ -247,6 +251,41 @@ def test_depth_selector_controls_how_many_questions_are_asked(monkeypatch):
     for name in ("data_model", "interfaces", "error_handling"):
         assert name in s.slots and s.slots[name].value
     assert not at.exception
+
+
+def test_guided_is_the_default_and_hides_the_depth_selector(monkeypatch):
+    at = _new_app(monkeypatch, _happy_llm)
+    assert at.radio(key="mode_choice").value == "Guided"
+    with pytest.raises(KeyError):
+        at.radio(key="depth_choice")  # not rendered in Guided
+
+
+def test_guided_run_completes_with_only_option_clicks(monkeypatch):
+    at = _new_app(monkeypatch, _happy_llm)
+    at.text_area(key="idea_input").set_value(
+        "a website where people can book rooms at my hotel"
+    )
+    at.run()
+    _btn(at, "Start").click()
+    at.run()
+
+    assert len(at.session_state.session.pending_slots) == 6  # Guided = 6 core
+
+    guard = 0
+    while not at.session_state.session.finished:
+        guard += 1
+        assert guard < 15
+        # never touch a text box — accept the pre-selected option, or delegate
+        try:
+            _btn(at, "Accept & continue").click()
+        except StopIteration:
+            _btn(at, "Decide for me").click()
+        at.run()
+
+    s = at.session_state.session
+    assert s.finished and not at.exception
+    for slot in engine.load_template(s.template_name).slots:
+        assert s.slots.get(slot.name) and s.slots[slot.name].value
 
 
 def test_regenerate_rewrites_the_spec_without_re_asking(monkeypatch):
