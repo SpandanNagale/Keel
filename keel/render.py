@@ -630,6 +630,19 @@ def _conflict_unavailable_bullet(reason: str | None) -> list[str]:
     ]
 
 
+def _reference_bullet(session: SessionState) -> list[str]:
+    """Provenance line so a scraped reference travels with the document."""
+    ref = getattr(session, "reference", None)
+    if not (ref and ref.confirmed and ref.source_urls):
+        return []
+    urls = ", ".join(ref.source_urls)
+    return [
+        f"- **Reference used:** structural cues (entities, surfaces, likely non-goals) "
+        f"were taken from {urls}. Product names, wording, and visual design were not "
+        "carried across — confirm the borrowed structure actually fits this build."
+    ]
+
+
 def _build_open_questions(
     session: SessionState, template: Template, bodies: dict[str, str]
 ) -> str:
@@ -639,6 +652,7 @@ def _build_open_questions(
     additions: list[str] = []
     additions += _conflict_bullets(session.conflicts)
     additions += _conflict_unavailable_bullet(session.conflict_check_error)
+    additions += _reference_bullet(session)
     additions += _unverified_figure_bullets(
         bodies.get("acceptance_criteria", ""), _slot_number_blob(session)
     )
@@ -777,6 +791,7 @@ def render_markdown(session: SessionState) -> str:
     oq: list[str] = _skipped_slot_bullets(session, template)
     oq += _conflict_bullets(session.conflicts)
     oq += _conflict_unavailable_bullet(session.conflict_check_error)
+    oq += _reference_bullet(session)
     sd = _sensitive_domain_bullet(
         session,
         {"blob": " ".join(v.value for v in session.slots.values() if v.value)},

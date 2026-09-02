@@ -56,6 +56,10 @@ def _happy_llm(system, user, **kw):
     return {"question": "How much data?", "recommended": "About 2,000 items, run weekly."}, None
 
 
+def _reference_call(system: str) -> bool:
+    return "reference analyst" in system
+
+
 def _dead_llm(system, user, **kw):
     return None, "AuthenticationError: invalid x-api-key"
 
@@ -331,6 +335,74 @@ def test_conflict_banner_appears_when_conflicts_are_present(monkeypatch):
     assert "keel-conflict" in blob
     assert "unresolved conflict" in blob
     assert "Offline-only cannot serve an AI model." in blob
+    assert not at.exception
+
+
+def _drive_to_reference_confirm(monkeypatch, evidence):
+    def llm(system, user, **kw):
+        if _reference_call(system):
+            return evidence, None
+        return _happy_llm(system, user, **kw)
+
+    monkeypatch.setattr("keel.llm.complete_json", llm)
+    monkeypatch.setattr("keel.firecrawl.scrape",
+                        lambda url, **kw: ({"markdown": "kanban content " * 200,
+                                            "metadata": {}, "url": url}, None))
+    at = AppTest.from_file("app.py")
+    at.secrets["ANTHROPIC_API_KEY"] = "sk-ant-smoke"
+    at.secrets["FIRECRAWL_API_KEY"] = "fc-smoke"
+    at.run()
+    at.text_area(key="idea_input").set_value("something like Trello for my team")
+    at.run()
+    at.text_input(key="ref_url").set_value("https://trello.com")
+    at.run()
+    _btn(at, "Fetch reference & continue").click()
+    at.run()
+    return at
+
+
+def test_reference_url_mode_reaches_the_confirm_view_and_prefills_on_use(monkeypatch):
+    at = _drive_to_reference_confirm(monkeypatch, {
+        "product": "Trello",
+        "core_entities": ["Board", "List", "Card"],
+        "surfaces": ["board view", "card modal"],
+        "primary_flows": ["drag a card between lists"],
+        "notable_features": ["labels", "due dates"],
+        "features_likely_out_of_scope_for_a_clone": ["Power-Ups", "billing"],
+    })
+
+    # on the confirm view: candidates and the resolved product are shown
+    assert at.session_state.pending_session is not None
+    blob = "\n".join(m.value for m in at.markdown)
+    assert "Trello" in blob and "keel-chip--reference" in blob
+    assert {b.label for b in at.button} >= {
+        "Use selected & continue", "Skip the reference, keep going", "Back to the idea"}
+
+    _btn(at, "Use selected & continue").click()
+    at.run()
+
+    s = at.session_state.session
+    assert s is not None and s.reference is not None and s.reference.confirmed
+    assert at.session_state.pending_session is None
+    ref_slots = [n for n, v in s.slots.items() if v.source == "reference"]
+    assert "data_model" in ref_slots and "non_goals" in ref_slots
+    assert "keel-chip--reference" in "\n".join(m.value for m in at.sidebar.markdown)
+    assert not at.exception
+
+
+def test_reference_can_be_skipped_from_the_confirm_view(monkeypatch):
+    at = _drive_to_reference_confirm(monkeypatch, {
+        "product": "X", "core_entities": ["Thing"], "surfaces": ["a page"],
+        "primary_flows": [], "notable_features": [],
+        "features_likely_out_of_scope_for_a_clone": [],
+    })
+    _btn(at, "Skip the reference, keep going").click()
+    at.run()
+
+    s = at.session_state.session
+    assert s is not None and s.reference is None
+    assert not any(v.source == "reference" for v in s.slots.values())
+    assert at.session_state.pending_session is None
     assert not at.exception
 
 

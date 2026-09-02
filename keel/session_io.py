@@ -13,9 +13,27 @@ import json
 from keel.models import SessionState
 
 # Bump when the serialised shape changes in a way older Keel cannot read.
-SCHEMA_VERSION = 1
+#   1 -> 2 (Phase 0/1): SlotSource "defaulted" split into llm_default /
+#          template_default; "degraded" is now derived, not stored; added
+#          synthesis_failed, resolved_conflicts, reference.
+SCHEMA_VERSION = 2
 
 _WRAPPER_KEY = "keel_session"
+
+
+def _migrate_1_to_2(body: dict) -> dict:
+    """A v1 file predates the provenance split. Map the old single "defaulted"
+    source to "llm_default" (the common case — an accepted suggestion), and drop
+    the stored "degraded" flag, which is now derived from state."""
+    body.pop("degraded", None)
+    for slot in (body.get("slots") or {}).values():
+        if isinstance(slot, dict) and slot.get("source") == "defaulted":
+            slot["source"] = "llm_default"
+    return body
+
+
+# version N -> N+1
+_MIGRATIONS = {1: _migrate_1_to_2}
 
 
 def dumps(session: SessionState) -> str:
@@ -50,15 +68,21 @@ def loads(text: str) -> tuple[SessionState | None, str | None]:
             f"(schema {version}; this Keel understands {SCHEMA_VERSION}). Update Keel or "
             "re-export the session."
         )
-    if version < SCHEMA_VERSION:
+    if version < 1:
+        return None, "not a valid Keel session file (bad schema_version)"
+    if any(v not in _MIGRATIONS for v in range(version, SCHEMA_VERSION)):
         return None, (
-            f"this session file uses an older schema ({version}) that this Keel no longer "
-            "reads. Start a fresh session."
+            f"this session file uses schema {version}, which this Keel cannot upgrade. "
+            "Start a fresh session."
         )
 
     body = data.get(_WRAPPER_KEY)
     if not isinstance(body, dict):
         return None, "session file is missing its body"
+
+    while version < SCHEMA_VERSION:  # step it up one schema at a time
+        body = _MIGRATIONS[version](body)
+        version += 1
 
     try:
         session = SessionState.model_validate(body)

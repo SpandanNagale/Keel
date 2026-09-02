@@ -1,5 +1,5 @@
 {
-  "schema_version": 1,
+  "schema_version": 2,
   "keel_session": {
     "original_prompt": "a booking website for a small hotel",
     "template_name": "web-app",
@@ -56,10 +56,12 @@
     "current_index": 0,
     "questions_asked": 0,
     "call_count": 0,
-    "degraded": false,
+    "synthesis_failed": false,
     "finished": true,
     "regen_count": 0,
     "conflicts": [],
-    "conflict_check_error": null
+    "conflict_check_error": null,
+    "resolved_conflicts": [],
+    "reference": null
   }
 }

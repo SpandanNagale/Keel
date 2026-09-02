@@ -32,6 +32,7 @@
 }
 .keel-chip--asked            { background: #16351f; color: #7ee29b; border-color: #245c37; }
 .keel-chip--extracted        { background: #12314a; color: #79c0ff; border-color: #1f4b70; }
+.keel-chip--reference        { background: #2c1f42; color: #c3a6f0; border-color: #45356a; }
 .keel-chip--llm-default      { background: #1b2f3a; color: #86c7d8; border-color: #2c4b5a; }
 .keel-chip--template-default { background: #3a2f16; color: #e8c473; border-color: #5c4a24; }
 .keel-chip--skipped          { background: #2a2f36; color: #9aa7b4; border-color: #3c454f; }

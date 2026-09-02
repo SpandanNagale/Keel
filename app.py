@@ -21,7 +21,8 @@ from pathlib import Path
 
 import streamlit as st
 
-from keel import engine, llm, render, session_io
+from keel import engine, llm, reference, render, session_io
+from keel.models import ReferenceState
 from keel.render import render_markdown
 
 _ASSETS = Path(__file__).parent / "assets"
@@ -98,6 +99,7 @@ def _inject_css() -> None:
 _SOURCE_META = {
     "extracted": ("from your idea", "extracted"),
     "asked": ("you answered", "asked"),
+    "reference": ("from a reference", "reference"),
     "llm_default": ("Keel suggested", "llm-default"),
     "template_default": ("template fallback", "template-default"),
     "skipped": ("skipped", "skipped"),
@@ -115,11 +117,12 @@ def _chip(source: str) -> str:
 # --------------------------------------------------------------------------- #
 def _init_state() -> None:
     if "session" not in st.session_state:
-        st.session_state.session = None      # keel.models.SessionState | None
-        st.session_state.pending_q = None    # {slot, question, recommended, error}
-        st.session_state.start_error = None  # extraction / upload error banner
-        st.session_state.final_md = None     # synthesized (or fallback) document
-        st.session_state.synth_error = None  # synthesis failure reason, if any
+        st.session_state.session = None          # keel.models.SessionState | None
+        st.session_state.pending_session = None  # session awaiting reference confirmation
+        st.session_state.pending_q = None        # {slot, question, recommended, error}
+        st.session_state.start_error = None      # extraction / upload / reference error banner
+        st.session_state.final_md = None         # synthesized (or fallback) document
+        st.session_state.synth_error = None      # synthesis failure reason, if any
 
 
 def _provider_for_call(byok: str, byok_provider: str) -> tuple["llm.Provider | None", bool, str | None]:
@@ -205,6 +208,117 @@ def _start(
     st.session_state.session = session
     st.session_state.pending_q = None
     _generate_pending_question(byok, byok_provider)
+
+
+def _begin_questions(session, byok: str, byok_provider: str, *, extract: bool) -> None:
+    """Promote a fully-prepared session to the live one and produce the first
+    question. Shared by the plain start path and the reference-confirm path."""
+    template = _load_template(session.template_name)
+    if extract:
+        provider, is_shared, blocking = _provider_for_call(byok, byok_provider)
+        if blocking is None:
+            if is_shared:
+                _record_shared_call()
+            engine.extract_prefilled(session, template, provider=provider)  # skips filled slots
+    engine.freeze_pending(session, template)
+    st.session_state.session = session
+    st.session_state.pending_session = None
+    st.session_state.pending_q = None
+    st.session_state.pop("_ref_edits", None)
+    _generate_pending_question(byok, byok_provider)
+
+
+def _fetch_reference(
+    prompt: str, template_name: str, depth: str, ref_url: str,
+    byok: str, byok_provider: str,
+) -> None:
+    """Mode B: scrape a pasted URL, extract structural evidence, and stage a
+    session with candidate slot values for the user to confirm. Costs one
+    Firecrawl fetch (up to 3) plus one LLM call, all counted against the caps."""
+    prompt = prompt.strip()
+    if not prompt or len(prompt) > MAX_PROMPT_CHARS:
+        st.session_state.start_error = (
+            f"The idea must be between 1 and {MAX_PROMPT_CHARS} characters."
+        )
+        return
+
+    fc_key = _secret("FIRECRAWL_API_KEY")
+    if not fc_key.strip():
+        st.session_state.start_error = (
+            "Reference intake needs a Firecrawl API key (set FIRECRAWL_API_KEY in "
+            "secrets). You can Start without a reference."
+        )
+        return
+
+    provider, is_shared, blocking = _provider_for_call(byok, byok_provider)
+    if blocking is not None:
+        st.session_state.start_error = f"Reference intake needs an LLM — {blocking}"
+        return
+
+    session = engine.start_session(
+        prompt, template_name, created_date=date.today().isoformat(), depth=depth
+    )
+    material, err = reference.gather_material(
+        ref_url, api_key=fc_key, fetch_budget=reference.MAX_REFERENCE_FETCHES
+    )
+    if err:
+        st.session_state.start_error = f"Could not use that reference — {err}"
+        return
+
+    if is_shared:
+        _record_shared_call()
+    evidence, err = reference.extract_evidence(
+        material["material"], session=session, provider=provider
+    )
+    if err:
+        st.session_state.start_error = f"Could not read that reference — {err}"
+        return
+
+    template = _load_template(template_name)
+    candidates = reference.evidence_to_candidates(evidence, template)
+    if not candidates:
+        st.session_state.start_error = (
+            "That reference did not yield anything concrete to borrow. Start without it."
+        )
+        return
+
+    session.reference = ReferenceState(
+        mode="url", query=ref_url.strip(), source_urls=material["urls"],
+        fetch_count=material["fetches"], evidence=evidence, candidates=candidates,
+    )
+    _clear_candidate_widgets()
+    st.session_state.pending_session = session
+    st.session_state.start_error = None
+
+
+def _confirm_reference(edits: dict[str, str], byok: str, byok_provider: str) -> None:
+    session = st.session_state.pending_session
+    if not session or not session.reference:
+        return
+    ref = session.reference
+    template = _load_template(session.template_name)
+    for c in ref.candidates:
+        c.value = str(edits.get(c.slot, c.value)).strip()
+        c.decision = "keep" if c.value else "drop"   # an emptied box drops the candidate
+    ref.applied = reference.apply_candidates(session, ref.candidates, template)
+    ref.confirmed = True
+    _begin_questions(session, byok, byok_provider, extract=True)
+
+
+def _skip_reference(byok: str, byok_provider: str) -> None:
+    """Keep the staged session (same idea / template / depth) but drop the
+    reference entirely."""
+    session = st.session_state.pending_session
+    if not session:
+        return
+    session.reference = None
+    _begin_questions(session, byok, byok_provider, extract=True)
+
+
+def _discard_pending() -> None:
+    st.session_state.pending_session = None
+    st.session_state.start_error = None
+    _clear_candidate_widgets()
 
 
 def _finalize(byok: str, byok_provider: str) -> None:
@@ -356,13 +470,20 @@ def _clear_edit_widgets() -> None:
         del st.session_state[k]
 
 
+def _clear_candidate_widgets() -> None:
+    # plain state key (not a widget key) holding in-progress reference edits
+    st.session_state.pop("_ref_edits", None)
+
+
 def _reset() -> None:
     st.session_state.session = None
+    st.session_state.pending_session = None
     st.session_state.pending_q = None
     st.session_state.start_error = None
     st.session_state.final_md = None
     st.session_state.synth_error = None
     _clear_edit_widgets()
+    _clear_candidate_widgets()
 
 
 # --------------------------------------------------------------------------- #
@@ -456,6 +577,18 @@ def _view_intro(byok: str, byok_provider: str) -> None:
     )
     depth = {"Quick": "quick", "Standard": "standard", "Thorough": "thorough"}[depth_label]
 
+    fc_configured = bool(_secret("FIRECRAWL_API_KEY").strip())
+    ref_url = st.text_input(
+        "Reference URL for structure (optional)",
+        key="ref_url", placeholder="https://linear.app — a product to borrow structure from",
+        disabled=not fc_configured,
+        help="Keel scrapes it for structure only — entities, screens, likely non-goals — "
+        "and shows every candidate to keep, edit, or drop before it enters the spec. "
+        "Names, wording, and visual design are never carried across.",
+    )
+    if not fc_configured:
+        st.caption("Set `FIRECRAWL_API_KEY` in secrets to enable reference intake.")
+
     shared, _ = _shared_provider()
     if shared is None and not byok.strip():
         st.info(
@@ -464,9 +597,13 @@ def _view_intro(byok: str, byok_provider: str) -> None:
             "LLM assistance."
         )
 
-    if st.button("Start", type="primary", key="start_btn", disabled=not prompt.strip()):
+    start_label = "Fetch reference & continue" if (ref_url.strip() and fc_configured) else "Start"
+    if st.button(start_label, type="primary", key="start_btn", disabled=not prompt.strip()):
         _clear_edit_widgets()
-        _start(prompt, choice, depth, byok, byok_provider)
+        if ref_url.strip() and fc_configured:
+            _fetch_reference(prompt, choice, depth, ref_url, byok, byok_provider)
+        else:
+            _start(prompt, choice, depth, byok, byok_provider)
         st.rerun()
 
     if st.session_state.start_error:
@@ -483,6 +620,52 @@ def _view_intro(byok: str, byok_provider: str) -> None:
             _clear_edit_widgets()
             _load_session(up.getvalue())
             st.rerun()
+
+
+def _view_reference_confirm(byok: str, byok_provider: str) -> None:
+    session = st.session_state.pending_session
+    ref = session.reference
+    st.subheader("Reference for structure")
+    ev = ref.evidence
+    if ev and ev.product:
+        st.markdown(f"Resolved to **{html.escape(ev.product)}**.")
+    st.caption(
+        "Structural cues from "
+        + ", ".join(f"[{html.escape(u)}]({u})" for u in ref.source_urls)
+        + f" · {ref.fetch_count} page fetch"
+        + ("es" if ref.fetch_count != 1 else "")
+        + ". Keep, edit, or drop each candidate — nothing here enters the spec until you do."
+    )
+
+    st.caption("Edit any candidate, or clear a box to drop it.")
+    edits: dict[str, str] = {}
+    for c in ref.candidates:
+        slot = _load_template(session.template_name).slot(c.slot)
+        label = slot.label if slot else c.slot
+        st.markdown(f"**{html.escape(label)}** &nbsp; {_chip('reference')}",
+                    unsafe_allow_html=True)
+        st.caption(f"From the reference: {html.escape(c.evidence)}")
+        # No widget key: a keyed widget that vanishes when this view is torn down
+        # trips AppTest, and the value is captured here anyway.
+        seed = st.session_state.get("_ref_edits", {}).get(c.slot, c.value)
+        edits[c.slot] = st.text_area(label, value=seed, height=80,
+                                     label_visibility="collapsed")
+        st.divider()
+    st.session_state["_ref_edits"] = edits  # survives this view's own reruns
+
+    c1, c2 = st.columns(2)
+    if c1.button("Use selected & continue", type="primary", key="ref_use_btn"):
+        _confirm_reference(dict(edits), byok, byok_provider)
+        st.rerun()
+    if c2.button("Skip the reference, keep going", key="ref_skip_btn"):
+        _skip_reference(byok, byok_provider)
+        st.rerun()
+    if st.button("Back to the idea", key="ref_back_btn"):
+        _discard_pending()
+        st.rerun()
+
+    if st.session_state.start_error:
+        st.warning(st.session_state.start_error)
 
 
 def _view_questions(byok: str, byok_provider: str) -> None:
@@ -652,7 +835,7 @@ def _review_and_regenerate(byok: str, byok_provider: str) -> None:
     st.markdown(
         " &nbsp; ".join(
             _chip(s) for s in
-            ("extracted", "asked", "llm_default", "template_default", "skipped")
+            ("extracted", "asked", "reference", "llm_default", "template_default", "skipped")
         ),
         unsafe_allow_html=True,
     )
@@ -690,7 +873,9 @@ def main() -> None:
     _sidebar_slot_panel()
     session = st.session_state.session
 
-    if session is None:
+    if st.session_state.get("pending_session") is not None:
+        _view_reference_confirm(byok, byok_provider)
+    elif session is None:
         _view_intro(byok, byok_provider)
     elif not session.finished:
         _view_questions(byok, byok_provider)

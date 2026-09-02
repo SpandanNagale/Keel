@@ -15,6 +15,7 @@ from pydantic import BaseModel, Field
 #
 #   extracted        - pulled from the user's original prompt
 #   asked            - the user typed this answer (or edited it in review)
+#   reference        - confirmed from a scraped reference (a URL / product / image)
 #   llm_default      - an LLM generated a contextual default; the user accepted it
 #   template_default - static YAML fallback text; the LLM was unavailable
 #   skipped          - the user declined to answer
@@ -22,7 +23,9 @@ from pydantic import BaseModel, Field
 # The split between llm_default and template_default matters: only the latter is
 # a genuine degradation. A uniform "Keel default" label was Bug 1 — it made the
 # sidebar and the degraded banner lie about a document full of contextual detail.
-SlotSource = Literal["extracted", "asked", "llm_default", "template_default", "skipped"]
+SlotSource = Literal[
+    "extracted", "asked", "reference", "llm_default", "template_default", "skipped"
+]
 
 # Fixed output sections, in render order. Every slot's ``section`` must be one of
 # these; ``context`` also absorbs the opening prompt and the degraded note.
@@ -76,6 +79,43 @@ class SlotValue(BaseModel):
     source: SlotSource
 
 
+# --------------------------------------------------------------------------- #
+# Reference intake (Phase 1): external evidence -> candidate slot values
+# --------------------------------------------------------------------------- #
+class Evidence(BaseModel):
+    """Structural facts pulled from a scraped reference. Deliberately carries no
+    marketing copy, branding, colours, or pricing — structure only."""
+
+    product: str = ""
+    core_entities: list[str] = Field(default_factory=list)
+    primary_flows: list[str] = Field(default_factory=list)
+    surfaces: list[str] = Field(default_factory=list)
+    notable_features: list[str] = Field(default_factory=list)
+    features_likely_out_of_scope: list[str] = Field(default_factory=list)
+
+
+class SlotCandidate(BaseModel):
+    """One proposed slot value derived from a reference. It becomes a real answer
+    only after the developer keeps it (optionally edited) in the confirm step."""
+
+    slot: str
+    value: str
+    evidence: str = ""          # the reference phrases this was built from
+    decision: str = "keep"      # "keep" | "drop"
+
+
+class ReferenceState(BaseModel):
+    mode: str                                   # "url" (Phase 1); "name" / "image" later
+    query: str = ""                             # the raw URL or product name given
+    source_urls: list[str] = Field(default_factory=list)
+    fetch_count: int = 0
+    evidence: Optional[Evidence] = None
+    candidates: list[SlotCandidate] = Field(default_factory=list)
+    applied: int = 0
+    confirmed: bool = False
+    error: Optional[str] = None
+
+
 class SessionState(BaseModel):
     """The whole of a Keel run. ``app.py`` stores exactly one of these in
     ``st.session_state`` and never mutates it during render."""
@@ -112,6 +152,9 @@ class SessionState(BaseModel):
     # plus "resolution". Shown in the UI as "Resolved during synthesis"; never
     # written into "Open questions" — only surviving conflicts go there.
     resolved_conflicts: list[dict] = Field(default_factory=list)
+    # Reference intake, if one was gathered before the questions. Slots it filled
+    # carry source "reference"; the source URL(s) are noted in "Open questions".
+    reference: Optional[ReferenceState] = None
 
     @property
     def degraded(self) -> bool:

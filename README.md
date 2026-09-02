@@ -26,6 +26,10 @@ Set `KEEL_MODEL` to override the model for whichever provider is active. The app
 runs with no key — degraded, clearly labelled, using template defaults. The sidebar also
 takes a per-session key for any of the three providers.
 
+`FIRECRAWL_API_KEY` is optional — it powers the "reference for structure" feature
+([Firecrawl](https://firecrawl.dev)). Without it, that input is disabled and everything
+else works unchanged.
+
 ### Local Ollama for development
 
 Prompt iteration (especially the synthesis prompt) burns hosted quota fast. For local
@@ -104,7 +108,9 @@ keel/models.py            pydantic models
 keel/engine.py            slot state machine, template loading, the capped LLM helper
 keel/render.py            synthesis pass + deterministic fallback -> markdown
 keel/llm.py               the one place an LLM is called; returns (result, error)
-keel/session_io.py        session <-> JSON, with a schema-version gate
+keel/session_io.py        session <-> JSON, schema-version gate + migrations (v1 -> v2)
+keel/firecrawl.py         stdlib HTTP client for the Firecrawl scrape / map API
+keel/reference.py         reference intake: scraped markdown -> evidence -> slot candidates
 keel/templates/*.yaml     five slot templates
 .streamlit/config.toml    dark theme palette
 assets/style.css          the CSS the theme block can't reach (chips, conflict banner)
@@ -112,8 +118,8 @@ doctor.py                 one-live-call smoke script
 tests/
 ```
 
-`keel/engine.py`, `keel/render.py`, and `keel/session_io.py` import and pass their tests
-without Streamlit installed.
+`keel/engine.py`, `keel/render.py`, `keel/session_io.py`, `keel/firecrawl.py`, and
+`keel/reference.py` import and pass their tests without Streamlit installed.
 
 The result screen renders the spec section by section (each collapsible), shows a conflict
 banner above it when `check_conflicts` found anything, and colour-codes every answer by
@@ -130,8 +136,9 @@ builds one. Groq and Ollama enforce JSON natively; Anthropic via an assistant-tu
 reason and falls back to template text.
 
 Every answer carries a **source**: `extracted` (from your idea), `asked` (you typed it),
-`llm_default` (the model suggested it and you accepted), `template_default` (static YAML
-fallback, the model was unavailable), or `skipped`. `SessionState.degraded` is *derived*
+`reference` (confirmed from a scraped reference — see below), `llm_default` (the model
+suggested it and you accepted), `template_default` (static YAML fallback, the model was
+unavailable), or `skipped`. `SessionState.degraded` is *derived*
 from that state — it is true only when a slot is on `template_default`, or the synthesis
 or conflict-check call actually failed. A transient earlier error that did not change the
 finished document (a missed extraction, one re-tried question) does not trip the banner.
@@ -183,6 +190,28 @@ note (`synthesis_failed` is set). That renderer stays fully functional with no L
 
 Past the daily ceiling the shared key is disabled and users are directed to supply their
 own via the sidebar **API key** field (used for that session only, never stored).
+
+## Reference for structure
+
+When you have only a rough notion ("something like Trello"), a blank slot page is hard to
+answer. Paste a **reference URL** on the start screen and Keel scrapes it — via
+[Firecrawl](https://firecrawl.dev), keyed from `FIRECRAWL_API_KEY` in secrets — for
+*structure only*: entities, screens and endpoints, primary flows, and the features a first
+build would deliberately skip. One LLM call turns that into candidate slot values.
+
+Nothing enters the spec unconfirmed. A confirm step shows every candidate with the
+reference phrases it came from; you keep, edit, or drop each one (clear the box to drop it).
+Kept values fill their slot with source `reference`; the rest of the slots are asked as
+normal. The source URL is recorded in *Open questions* so the provenance travels with the
+document — product names, wording, and visual design are never carried across.
+
+A reference costs one Firecrawl fetch (a thin landing page triggers up to two more
+structural sub-pages, hard-capped at three) plus one LLM call, both counted against the
+session caps. Non-HTTP schemes, IP literals, and loopback / internal hosts are refused
+before anything is fetched. Every reference mode is optional; the blank-prompt flow is the
+default and works with Firecrawl unavailable. `keel/firecrawl.py` (the HTTP client, stdlib
+only) and `keel/reference.py` (evidence → candidates → slots) import and test without
+Streamlit.
 
 ## Save, edit, regenerate
 

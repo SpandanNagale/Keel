@@ -70,3 +70,40 @@ def test_call_count_survives_a_round_trip_so_re_upload_cannot_reset_the_budget()
     back, _ = session_io.loads(session_io.dumps(s))
     assert back.call_count == 18
     assert engine.regenerations_left(back) == 1  # (20 - 18) // 2
+
+
+def test_a_v1_file_is_migrated_to_the_current_schema():
+    v1 = json.dumps({
+        "schema_version": 1,
+        "keel_session": {
+            "original_prompt": "an old session", "template_name": "default",
+            "created_date": "2026-08-01", "finished": True, "degraded": True,
+            "slots": {
+                "runtime": {"value": "a cron job", "source": "asked"},
+                "scale": {"value": "small", "source": "defaulted"},
+            },
+        },
+    })
+    back, err = session_io.loads(v1)
+    assert err is None
+    assert back.slots["scale"].source == "llm_default"   # "defaulted" -> llm_default
+    assert back.slots["runtime"].source == "asked"
+    assert back.reference is None and back.synthesis_failed is False
+
+
+def test_a_reference_round_trips():
+    from keel.models import Evidence, ReferenceState, SlotCandidate, SlotValue
+
+    s = _session()
+    s.slots["non_goals"] = SlotValue(value="no billing", source="reference")
+    s.reference = ReferenceState(
+        mode="url", query="https://ex.com", source_urls=["https://ex.com/features"],
+        fetch_count=2, evidence=Evidence(product="Ex", core_entities=["Widget"]),
+        candidates=[SlotCandidate(slot="non_goals", value="no billing")],
+        applied=1, confirmed=True,
+    )
+    back, err = session_io.loads(session_io.dumps(s))
+    assert err is None
+    assert back.reference.source_urls == ["https://ex.com/features"]
+    assert back.reference.evidence.product == "Ex"
+    assert back.slots["non_goals"].source == "reference"
