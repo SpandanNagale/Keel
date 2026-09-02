@@ -59,6 +59,16 @@ _NEEDS_KEY = frozenset(SECRET_KEYS)
 OLLAMA_CLOUD_HOST = "https://ollama.com"
 LOCAL_OLLAMA_HOST = "http://localhost:11434"
 
+# Vision-capable model per provider, for reference Mode C (image intake).
+# Groq's default model is text-only; a vision model must be named explicitly via
+# KEEL_VISION_MODEL. Override any of these with KEEL_VISION_MODEL.
+VISION_MODELS: dict[str, str] = {
+    "anthropic": "claude-haiku-4-5-20251001",
+    "ollama": "llama3.2-vision",
+    "ollama-cloud": "llama3.2-vision",
+}
+VISION_MIME_TYPES = ("image/png", "image/jpeg", "image/webp")
+
 # One question is never worth more than this many output tokens.
 MAX_OUTPUT_TOKENS = 800
 
@@ -121,23 +131,70 @@ def resolve_provider(
     )
 
 
+def resolve_vision_provider(
+    available: Mapping[str, str],
+    *,
+    model_override: str | None = None,
+    env: Mapping[str, str] | None = None,
+) -> tuple[Optional[Provider], Optional[str]]:
+    """Pick a provider that can read an image for reference Mode C.
+
+    ``KEEL_PROVIDER=ollama`` -> the local daemon with a vision model. Otherwise
+    Anthropic if its key is present (Claude Haiku is multimodal); or Groq if
+    ``KEEL_VISION_MODEL`` names one and only the Groq key is configured. No vision
+    setup -> ``(None, reason)`` so the caller can degrade with a clear message.
+    """
+    env = env if env is not None else os.environ
+    forced = str(env.get("KEEL_PROVIDER", "")).strip().lower()
+    vm = (model_override or "").strip() or str(env.get("KEEL_VISION_MODEL", "")).strip()
+
+    if forced == "ollama":
+        model = vm or str(env.get("KEEL_OLLAMA_VISION_MODEL", "")).strip() or VISION_MODELS["ollama"]
+        return Provider("ollama", api_key="", model=model, host=LOCAL_OLLAMA_HOST), None
+
+    anth = str(available.get("ANTHROPIC_API_KEY") or available.get("anthropic") or "").strip()
+    if anth:
+        return Provider("anthropic", anth, vm or VISION_MODELS["anthropic"]), None
+
+    groq_key = str(available.get("GROQ_API_KEY") or available.get("groq") or "").strip()
+    if groq_key and vm:
+        return Provider("groq", groq_key, vm), None
+
+    return None, (
+        "no vision-capable model is configured — set ANTHROPIC_API_KEY, or run a "
+        "local Ollama vision model (KEEL_PROVIDER=ollama), or set KEEL_VISION_MODEL "
+        "to a vision model on your Groq key"
+    )
+
+
 def complete_json(
     system: str,
     user: str,
     *,
     provider: Optional[Provider],
     max_tokens: int = MAX_OUTPUT_TOKENS,
+    image: Optional[tuple[bytes, str]] = None,
 ) -> tuple[Optional[dict], Optional[str]]:
     """Make one call to ``provider`` and parse a JSON object out of the reply.
 
     Returns ``(parsed_dict, None)`` on success or ``(None, reason)`` on any
     failure: no provider, missing key, import failure, network/API error, empty
     reply, non-JSON reply, or JSON that is not an object.
+
+    ``image`` is an optional ``(bytes, mime_type)`` pair for a multimodal call
+    (reference Mode C). Only ``anthropic``, ``ollama``, ``ollama-cloud``, and a
+    Groq provider whose ``model`` is explicitly a vision model accept it.
     """
     if provider is None:
         return None, "no LLM provider configured for this session"
     if provider.name in _NEEDS_KEY and not str(provider.api_key).strip():
         return None, f"no {provider.name} API key configured for this session"
+    if image is not None:
+        img_bytes, mime = image
+        if mime not in VISION_MIME_TYPES:
+            return None, f"unsupported image type {mime!r} (use PNG, JPEG, or WebP)"
+        if not img_bytes:
+            return None, "the image is empty"
 
     dispatch = {
         "groq": _groq_raw,
@@ -150,7 +207,7 @@ def complete_json(
         return None, f"unknown provider {provider.name!r}"
 
     try:
-        raw, error = fn(system, user, provider, max_tokens)
+        raw, error = fn(system, user, provider, max_tokens, image)
     except Exception as exc:  # noqa: BLE001 - every failure must become a reason string
         return None, f"{provider.name}: {type(exc).__name__}: {exc}"
 
@@ -163,12 +220,28 @@ def complete_json(
 
 # --------------------------------------------------------------------------- #
 # Per-provider calls: return (raw_text, error). Exceptions bubble to caller.
+# The trailing ``image`` arg is an optional (bytes, mime) pair for a vision call.
 # --------------------------------------------------------------------------- #
-def _anthropic_raw(system, user, provider, max_tokens):
+def _b64(data: bytes) -> str:
+    import base64
+    return base64.b64encode(data).decode("ascii")
+
+
+def _anthropic_raw(system, user, provider, max_tokens, image=None):
     try:
         import anthropic
     except ImportError as exc:  # pragma: no cover
         return None, f"anthropic package not importable: {exc}"
+
+    if image is not None:
+        img_bytes, mime = image
+        user_content = [
+            {"type": "image", "source": {"type": "base64", "media_type": mime,
+                                         "data": _b64(img_bytes)}},
+            {"type": "text", "text": user},
+        ]
+    else:
+        user_content = user
 
     client = anthropic.Anthropic(api_key=provider.api_key)
     response = client.messages.create(
@@ -176,7 +249,7 @@ def _anthropic_raw(system, user, provider, max_tokens):
         max_tokens=max_tokens,
         system=system,
         messages=[
-            {"role": "user", "content": user},
+            {"role": "user", "content": user_content},
             {"role": "assistant", "content": "{"},
         ],
     )
@@ -186,28 +259,35 @@ def _anthropic_raw(system, user, provider, max_tokens):
     return "{" + "".join(parts), None
 
 
-def _groq_raw(system, user, provider, max_tokens):
+def _groq_raw(system, user, provider, max_tokens, image=None):
     try:
         import groq
     except ImportError as exc:  # pragma: no cover
         return None, f"groq package not importable: {exc}"
+
+    if image is not None:
+        img_bytes, mime = image
+        user_msg = {"role": "user", "content": [
+            {"type": "text", "text": user},
+            {"type": "image_url",
+             "image_url": {"url": f"data:{mime};base64,{_b64(img_bytes)}"}},
+        ]}
+    else:
+        user_msg = {"role": "user", "content": user}
 
     client = groq.Groq(api_key=provider.api_key)
     response = client.chat.completions.create(
         model=provider.model,
         max_tokens=max_tokens,
         response_format={"type": "json_object"},
-        messages=[
-            {"role": "system", "content": system},
-            {"role": "user", "content": user},
-        ],
+        messages=[{"role": "system", "content": system}, user_msg],
     )
     if not response.choices:
         return None, "groq returned no choices"
     return response.choices[0].message.content, None
 
 
-def _ollama_raw(system, user, provider, max_tokens):
+def _ollama_raw(system, user, provider, max_tokens, image=None):
     try:
         import ollama
     except ImportError as exc:  # pragma: no cover
@@ -216,13 +296,13 @@ def _ollama_raw(system, user, provider, max_tokens):
     host = provider.host or OLLAMA_CLOUD_HOST
     headers = {"Authorization": f"Bearer {provider.api_key}"} if provider.api_key else None
     client = ollama.Client(host=host, headers=headers)
+    user_msg = {"role": "user", "content": user}
+    if image is not None:
+        user_msg["images"] = [_b64(image[0])]
     try:
         response = client.chat(
             model=provider.model,
-            messages=[
-                {"role": "system", "content": system},
-                {"role": "user", "content": user},
-            ],
+            messages=[{"role": "system", "content": system}, user_msg],
             format="json",
             options={"num_predict": max_tokens},
         )

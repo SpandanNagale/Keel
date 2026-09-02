@@ -208,6 +208,13 @@ Either way Keel then scrapes for *structure only* — via Firecrawl, keyed from
 features a first build would deliberately skip. One LLM call turns that into candidate slot
 values.
 
+You can also **upload a screenshot or a hand-drawn sketch** of a UI (PNG/JPEG/WebP, ≤ 4 MB).
+A vision model reads the screens, form fields, and navigation — structure only, no copy or
+branding. This needs a multimodal model: `ANTHROPIC_API_KEY` (Claude Haiku is multimodal),
+a local Ollama vision model (`KEEL_PROVIDER=ollama`), or `KEEL_VISION_MODEL` naming a vision
+model on your Groq key. Without one, the image field is disabled and says why — the default
+Groq model (`openai/gpt-oss-120b`) is text-only.
+
 Nothing enters the spec unconfirmed. A confirm step shows every candidate with the
 reference phrases it came from; you keep, edit, or drop each one (clear the box to drop it).
 Kept values fill their slot with source `reference`; the rest of the slots are asked as

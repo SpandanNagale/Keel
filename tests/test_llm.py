@@ -69,6 +69,61 @@ def test_keel_provider_unknown_value_is_an_error():
 
 
 # --------------------------------------------------------------------------- #
+# resolve_vision_provider  (reference Mode C)
+# --------------------------------------------------------------------------- #
+def test_vision_prefers_anthropic_when_its_key_is_present():
+    prov, err = llm.resolve_vision_provider(
+        {"GROQ_API_KEY": "g", "ANTHROPIC_API_KEY": "a"}, env={}
+    )
+    assert err is None and prov.name == "anthropic"
+    assert prov.model == llm.VISION_MODELS["anthropic"]
+
+
+def test_vision_uses_local_ollama_when_forced():
+    prov, err = llm.resolve_vision_provider({}, env={"KEEL_PROVIDER": "ollama"})
+    assert err is None and prov.name == "ollama" and prov.host == llm.LOCAL_OLLAMA_HOST
+    assert prov.model == llm.VISION_MODELS["ollama"]
+
+
+def test_vision_allows_groq_only_with_an_explicit_vision_model():
+    none_prov, err = llm.resolve_vision_provider({"GROQ_API_KEY": "g"}, env={})
+    assert none_prov is None and "no vision-capable model" in err
+    prov, err2 = llm.resolve_vision_provider(
+        {"GROQ_API_KEY": "g"}, env={"KEEL_VISION_MODEL": "some-vlm"}
+    )
+    assert err2 is None and prov.name == "groq" and prov.model == "some-vlm"
+
+
+def test_vision_with_nothing_configured_is_a_clear_error():
+    prov, err = llm.resolve_vision_provider({}, env={})
+    assert prov is None and "ANTHROPIC_API_KEY" in err
+
+
+def test_complete_json_rejects_a_bad_image_mime():
+    result, error = llm.complete_json(
+        "s", "u", provider=P("anthropic"), image=(b"\x89PNG", "image/gif")
+    )
+    assert result is None and "unsupported image type" in error
+
+
+def test_anthropic_vision_message_carries_the_image_block(fake_anthropic):
+    seen = {}
+
+    class R:
+        content = [type("B", (), {"type": "text", "text": '"ok": true}'})()]
+
+    fake_anthropic(lambda **kw: seen.update(kw) or R())
+    result, error = llm.complete_json(
+        "s", "describe", provider=P("anthropic"), image=(b"\x89PNGdata", "image/png")
+    )
+    assert error is None and result == {"ok": True}
+    content = seen["messages"][0]["content"]
+    assert isinstance(content, list)
+    assert content[0]["type"] == "image" and content[0]["source"]["media_type"] == "image/png"
+    assert content[1] == {"type": "text", "text": "describe"}
+
+
+# --------------------------------------------------------------------------- #
 # complete_json — guard rails
 # --------------------------------------------------------------------------- #
 def test_missing_provider_is_an_error_not_a_call():

@@ -22,11 +22,34 @@ from keel.models import Evidence, SessionState, SiteCandidate, SlotCandidate, Te
 
 MAX_REFERENCE_FETCHES = 3
 MAX_SITE_CANDIDATES = 3
+MAX_IMAGE_BYTES = 4 * 1024 * 1024
+_IMAGE_MIME = {"png": "image/png", "jpg": "image/jpeg", "jpeg": "image/jpeg",
+               "webp": "image/webp"}
 _THIN_PAGE_CHARS = 1500       # below this, the home page is treated as a thin landing page
 _TOTAL_MATERIAL_CHARS = 14000
 # The evidence JSON is small, but a reasoning model (Groq gpt-oss) spends most of
 # its budget thinking before it emits — too low and the call dies mid-JSON.
 _EVIDENCE_MAX_TOKENS = 2500
+
+
+_IMAGE_EVIDENCE_SYSTEM = """You are Keel's reference analyst. You are given a screenshot or a \
+hand-drawn sketch of a software UI. Extract ONLY structural information a developer would use \
+to scope a similar build.
+
+Return ONLY a JSON object with exactly these keys:
+  "product"          - "" (an image carries no reliable product name)
+  "core_entities"    - the data objects implied by what each screen shows (e.g. "Order", "Item")
+  "primary_flows"    - what a user does across the screens, as short verb phrases
+  "surfaces"         - each screen or view, named by what it is (e.g. "list screen", "detail
+                       screen", "settings form"); include the fields on any form you can see
+  "notable_features" - interactions or capabilities the layout implies (search, filters, tabs)
+  "features_likely_out_of_scope_for_a_clone" - []
+
+Rules:
+- Structure only. Do NOT transcribe copy, headings, labels verbatim, brand names, colours, \
+  logos, or imagery. Describe the SHAPE of each screen, not its content.
+- Each list item is a short phrase. If the image does not support a key, use an empty list.
+- Do not invent screens or fields that are not visible."""
 
 
 _EVIDENCE_SYSTEM = """You are Keel's reference analyst. You are given text scraped from a \
@@ -196,6 +219,38 @@ def extract_evidence(
         provider=provider,
         max_tokens=_EVIDENCE_MAX_TOKENS,
     )
+    return _evidence_from_result(result, error)
+
+
+def image_mime(filename: str) -> str | None:
+    ext = (filename or "").rsplit(".", 1)[-1].lower()
+    return _IMAGE_MIME.get(ext)
+
+
+def extract_evidence_from_image(
+    image_bytes: bytes, mime: str, *, session: SessionState,
+    provider: "llm.Provider | None",
+) -> tuple[Evidence | None, str | None]:
+    """Mode C: one capped *vision* LLM call turning a UI screenshot or sketch into
+    structured :class:`Evidence` (structure only — no copy, branding, or colour)."""
+    if not image_bytes:
+        return None, "the image is empty"
+    if len(image_bytes) > MAX_IMAGE_BYTES:
+        return None, f"the image is larger than {MAX_IMAGE_BYTES // (1024 * 1024)} MB"
+    if mime not in llm.VISION_MIME_TYPES:
+        return None, "use a PNG, JPEG, or WebP image"
+    result, error = engine.capped_complete_json(
+        session,
+        _IMAGE_EVIDENCE_SYSTEM,
+        "Describe the structure of this UI as the JSON object. Structure only.",
+        provider=provider,
+        max_tokens=_EVIDENCE_MAX_TOKENS,
+        image=(image_bytes, mime),
+    )
+    return _evidence_from_result(result, error)
+
+
+def _evidence_from_result(result, error) -> tuple[Evidence | None, str | None]:
     if error:
         return None, error
     try:

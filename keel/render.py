@@ -633,12 +633,17 @@ def _conflict_unavailable_bullet(reason: str | None) -> list[str]:
 def _reference_bullet(session: SessionState) -> list[str]:
     """Provenance line so a scraped reference travels with the document."""
     ref = getattr(session, "reference", None)
-    if not (ref and ref.confirmed and ref.source_urls):
+    if not (ref and ref.confirmed):
         return []
-    urls = ", ".join(ref.source_urls)
+    if ref.mode == "image":
+        src = f"an uploaded UI image ({ref.query})"
+    elif ref.source_urls:
+        src = ", ".join(ref.source_urls)
+    else:
+        return []
     return [
         f"- **Reference used:** structural cues (entities, surfaces, likely non-goals) "
-        f"were taken from {urls}. Product names, wording, and visual design were not "
+        f"were taken from {src}. Product names, wording, and visual design were not "
         "carried across — confirm the borrowed structure actually fits this build."
     ]
 

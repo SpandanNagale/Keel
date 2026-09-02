@@ -433,6 +433,51 @@ def test_reference_name_mode_shows_a_site_picker_then_the_candidates(monkeypatch
     assert not at.exception
 
 
+_TINY_PNG = __import__("base64").b64decode(
+    "iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAYAAAAfFcSJAAAADUlEQVR42mP8z8BQDwAEhQGAhKmMIQAAAABJRU5ErkJggg=="
+)
+
+
+def test_image_reference_is_off_without_a_vision_model(monkeypatch):
+    monkeypatch.setattr("keel.llm.complete_json", _happy_llm)
+    at = AppTest.from_file("app.py")
+    at.secrets["GROQ_API_KEY"] = "gsk_text_only"     # no vision-capable key
+    at.run()
+    assert at.file_uploader(key="ref_image").disabled is True
+    caps = "\n".join(getattr(c, "value", "") for c in at.caption)
+    assert "vision model" in caps or "Image intake is off" in caps
+
+
+def test_image_reference_extracts_candidates_via_a_vision_model(monkeypatch):
+    def llm(system, user, **kw):
+        if "screenshot or a hand-drawn sketch" in system:
+            assert kw.get("image") == (_TINY_PNG, "image/png")
+            return {"product": "", "core_entities": ["Row", "Card"],
+                    "surfaces": ["list screen", "detail screen"],
+                    "primary_flows": ["open a row"], "notable_features": [],
+                    "features_likely_out_of_scope_for_a_clone": []}, None
+        return _happy_llm(system, user, **kw)
+
+    monkeypatch.setattr("keel.llm.complete_json", llm)
+    at = AppTest.from_file("app.py")
+    at.secrets["ANTHROPIC_API_KEY"] = "sk-ant-vision"  # Claude Haiku is multimodal
+    at.run()
+    at.text_area(key="idea_input").set_value("a small catalogue app")
+    at.run()
+    assert at.file_uploader(key="ref_image").disabled is False
+    at.file_uploader(key="ref_image").upload("wireframe.png", _TINY_PNG, "image/png")
+    at.run()
+    _btn(at, "Analyze image & continue").click()
+    at.run()
+
+    ref = at.session_state.pending_session.reference
+    assert ref.mode == "image" and ref.evidence is not None
+    assert {c.slot for c in ref.candidates} >= {"data_model", "interfaces"}
+    caps = "\n".join(getattr(c, "value", "") for c in at.caption)
+    assert "uploaded image" in caps
+    assert not at.exception
+
+
 def test_reference_can_be_skipped_from_the_confirm_view(monkeypatch):
     at = _drive_to_reference_confirm(monkeypatch, {
         "product": "X", "core_entities": ["Thing"], "surfaces": ["a page"],

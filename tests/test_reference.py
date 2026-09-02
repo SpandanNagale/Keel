@@ -140,6 +140,46 @@ def test_extract_evidence_surfaces_an_llm_failure(monkeypatch):
 
 
 # --------------------------------------------------------------------------- #
+# Mode C: image -> evidence
+# --------------------------------------------------------------------------- #
+@pytest.mark.parametrize("name, mime", [
+    ("shot.png", "image/png"), ("a.JPG", "image/jpeg"), ("m.jpeg", "image/jpeg"),
+    ("w.webp", "image/webp"), ("notes.pdf", None), ("x", None),
+])
+def test_image_mime(name, mime):
+    assert reference.image_mime(name) == mime
+
+
+def test_extract_evidence_from_image_passes_the_image_and_counts_the_call(monkeypatch):
+    seen = {}
+
+    def fake(session, system, user, **kw):
+        seen["image"] = kw.get("image")
+        seen["system"] = system
+        return {"product": "", "core_entities": ["Row"], "surfaces": ["list screen"],
+                "primary_flows": ["open a row"], "notable_features": [],
+                "features_likely_out_of_scope_for_a_clone": []}, None
+
+    monkeypatch.setattr("keel.engine.capped_complete_json", fake)
+    s = engine.start_session("x", "web-app", created_date="2026-09-01")
+    ev, err = reference.extract_evidence_from_image(b"\x89PNGdata", "image/png",
+                                                   session=s, provider=PROV)
+    assert err is None and ev.surfaces == ["list screen"]
+    assert seen["image"] == (b"\x89PNGdata", "image/png")
+    assert "screenshot or a hand-drawn sketch" in seen["system"]
+
+
+def test_extract_evidence_from_image_rejects_oversized_and_wrong_type():
+    s = engine.start_session("x", "web-app", created_date="2026-09-01")
+    ev, err = reference.extract_evidence_from_image(
+        b"x" * (reference.MAX_IMAGE_BYTES + 1), "image/png", session=s, provider=PROV)
+    assert ev is None and "larger than" in err
+    ev2, err2 = reference.extract_evidence_from_image(b"gif", "image/gif", session=s,
+                                                     provider=PROV)
+    assert ev2 is None and "PNG, JPEG, or WebP" in err2
+
+
+# --------------------------------------------------------------------------- #
 # evidence_to_candidates / apply_candidates
 # --------------------------------------------------------------------------- #
 def test_evidence_maps_to_the_right_slots_and_skips_empties():

@@ -73,6 +73,14 @@ def _shared_provider() -> tuple["llm.Provider | None", str | None]:
     return llm.resolve_provider(available, model_override=_model_override())
 
 
+def _vision_provider() -> tuple["llm.Provider | None", str | None]:
+    """A multimodal provider for reference Mode C (image), from secrets."""
+    available = {name: _secret(name) for name in llm.SECRET_KEYS.values()}
+    return llm.resolve_vision_provider(
+        available, model_override=_secret("KEEL_VISION_MODEL") or None
+    )
+
+
 @st.cache_data(show_spinner=False)
 def _load_template(name: str):
     return engine.load_template(name)
@@ -338,6 +346,58 @@ def _resolve_reference_pick(url: str, byok: str, byok_provider: str) -> None:
         st.session_state.start_error = err
         session.reference.site_candidates = []  # don't loop on the picker
         return
+    st.session_state.start_error = None
+
+
+def _fetch_reference_image(
+    prompt: str, template_name: str, depth: str, uploaded, byok: str, byok_provider: str
+) -> None:
+    """Mode C: read a screenshot / sketch with a vision model and stage the
+    session with candidate slot values for confirmation."""
+    prompt = prompt.strip()
+    if not prompt or len(prompt) > MAX_PROMPT_CHARS:
+        st.session_state.start_error = (
+            f"The idea must be between 1 and {MAX_PROMPT_CHARS} characters."
+        )
+        return
+
+    mime = reference.image_mime(getattr(uploaded, "name", ""))
+    if not mime:
+        st.session_state.start_error = "Upload a PNG, JPEG, or WebP image."
+        return
+    data = uploaded.getvalue()
+    if len(data) > reference.MAX_IMAGE_BYTES:
+        st.session_state.start_error = (
+            f"That image is over {reference.MAX_IMAGE_BYTES // (1024 * 1024)} MB."
+        )
+        return
+
+    vprov, vreason = _vision_provider()
+    if vprov is None:
+        st.session_state.start_error = f"Image intake needs a vision model — {vreason}"
+        return
+
+    session = engine.start_session(
+        prompt, template_name, created_date=date.today().isoformat(), depth=depth
+    )
+    session.reference = ReferenceState(mode="image", query=getattr(uploaded, "name", "image"))
+    _record_shared_call()
+    evidence, err = reference.extract_evidence_from_image(
+        data, mime, session=session, provider=vprov
+    )
+    if err:
+        st.session_state.start_error = f"Could not read that image — {err}"
+        return
+    candidates = reference.evidence_to_candidates(evidence, _load_template(template_name))
+    if not candidates:
+        st.session_state.start_error = (
+            "That image did not yield anything concrete to borrow. Start without it."
+        )
+        return
+    session.reference.evidence = evidence
+    session.reference.candidates = candidates
+    _clear_candidate_widgets()
+    st.session_state.pending_session = session
     st.session_state.start_error = None
 
 
@@ -628,6 +688,7 @@ def _view_intro(byok: str, byok_provider: str) -> None:
     depth = {"Quick": "quick", "Standard": "standard", "Thorough": "thorough"}[depth_label]
 
     fc_configured = bool(_secret("FIRECRAWL_API_KEY").strip())
+    vision_provider, vision_reason = _vision_provider()
     ref_url = st.text_input(
         "Reference for structure — a URL or a product name (optional)",
         key="ref_url", placeholder="https://linear.app  ·  or  ·  something like Trello",
@@ -637,8 +698,20 @@ def _view_intro(byok: str, byok_provider: str) -> None:
         "shows every candidate to keep, edit, or drop before it enters the spec. Names, "
         "wording, and visual design are never carried across.",
     )
-    if not fc_configured:
-        st.caption("Set `FIRECRAWL_API_KEY` in secrets to enable reference intake.")
+    ref_image = st.file_uploader(
+        "…or upload a screenshot / sketch of a UI (optional)",
+        type=["png", "jpg", "jpeg", "webp"], key="ref_image",
+        disabled=vision_provider is None,
+        help="A vision model reads the screens, fields, and navigation — structure "
+        "only, no copy or branding. Max 4 MB.",
+    )
+    if not fc_configured and vision_provider is None:
+        st.caption(
+            "Reference intake needs `FIRECRAWL_API_KEY` (URL / name) or a vision "
+            f"model for images — {vision_reason}."
+        )
+    elif vision_provider is None:
+        st.caption(f"Image intake is off — {vision_reason}.")
 
     shared, _ = _shared_provider()
     if shared is None and not byok.strip():
@@ -648,10 +721,18 @@ def _view_intro(byok: str, byok_provider: str) -> None:
             "LLM assistance."
         )
 
-    start_label = "Fetch reference & continue" if (ref_url.strip() and fc_configured) else "Start"
+    use_image = ref_image is not None
+    use_url = bool(ref_url.strip()) and fc_configured and not use_image
+    start_label = (
+        "Analyze image & continue" if use_image
+        else "Fetch reference & continue" if use_url
+        else "Start"
+    )
     if st.button(start_label, type="primary", key="start_btn", disabled=not prompt.strip()):
         _clear_edit_widgets()
-        if ref_url.strip() and fc_configured:
+        if use_image:
+            _fetch_reference_image(prompt, choice, depth, ref_image, byok, byok_provider)
+        elif use_url:
             _fetch_reference(prompt, choice, depth, ref_url, byok, byok_provider)
         else:
             _start(prompt, choice, depth, byok, byok_provider)
@@ -707,13 +788,19 @@ def _view_reference_confirm(byok: str, byok_provider: str) -> None:
     ev = ref.evidence
     if ev and ev.product:
         st.markdown(f"Resolved to **{html.escape(ev.product)}**.")
-    st.caption(
-        "Structural cues from "
-        + ", ".join(f"[{html.escape(u)}]({u})" for u in ref.source_urls)
-        + f" · {ref.fetch_count} page fetch"
-        + ("es" if ref.fetch_count != 1 else "")
-        + ". Keep, edit, or drop each candidate — nothing here enters the spec until you do."
-    )
+    if ref.mode == "image":
+        st.caption(
+            f"Structural cues read from your uploaded image (`{html.escape(ref.query)}`). "
+            "Keep, edit, or drop each candidate — nothing here enters the spec until you do."
+        )
+    else:
+        st.caption(
+            "Structural cues from "
+            + ", ".join(f"[{html.escape(u)}]({u})" for u in ref.source_urls)
+            + f" · {ref.fetch_count} page fetch"
+            + ("es" if ref.fetch_count != 1 else "")
+            + ". Keep, edit, or drop each candidate — nothing here enters the spec until you do."
+        )
 
     st.caption("Edit any candidate, or clear a box to drop it.")
     edits: dict[str, str] = {}

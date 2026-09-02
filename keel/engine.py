@@ -366,13 +366,16 @@ def capped_complete_json(
     *,
     provider: "llm.Provider | None",
     max_tokens: int = llm.MAX_OUTPUT_TOKENS,
+    image: "tuple[bytes, str] | None" = None,
 ) -> tuple[dict | None, str | None]:
     """The only way any part of Keel makes an LLM call. Enforces the per-session
     call cap, increments the counter, and forwards to :func:`keel.llm.complete_json`."""
     if session.call_count >= MAX_LLM_CALLS_PER_SESSION:
         return None, f"session LLM call limit reached ({MAX_LLM_CALLS_PER_SESSION} calls)"
     session.call_count += 1
-    return llm.complete_json(system, user, provider=provider, max_tokens=max_tokens)
+    return llm.complete_json(
+        system, user, provider=provider, max_tokens=max_tokens, image=image
+    )
 
 
 _EXTRACTION_SYSTEM = """You are Keel, which compiles vague software project ideas into precise build specs.
