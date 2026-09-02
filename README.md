@@ -37,14 +37,21 @@ work, point Keel at an Ollama daemon:
 
 ```
 ollama serve                                  # in another terminal
-ollama pull llama3.2                           # or any small instruct model
+ollama pull qwen3:14b                          # or any capable instruct model
 KEEL_PROVIDER=ollama streamlit run app.py
 ```
 
+`KEEL_PROVIDER` is read from the OS environment **or** from a line in
+`.streamlit/secrets.toml` (`KEEL_PROVIDER = "ollama"`) — pin it there and every `streamlit
+run` / `python evals/run_evals.py` uses the local daemon with no per-command export.
+
 `KEEL_PROVIDER=ollama` uses `http://localhost:11434` with no API key. Override the model
-with `KEEL_OLLAMA_MODEL` (default `llama3.2`). If nothing answers on localhost the error
-says so — it never silently pretends the call worked, and the deployed app never takes
-this path unless a deployer sets that env var.
+with `KEEL_OLLAMA_MODEL` (default `qwen3:14b`; the app also accepts `KEEL_MODEL`). Keel
+sends `think=False` on local calls so a reasoning model does not spend its whole token
+budget on hidden chain-of-thought and return empty JSON — harmless for plain instruct
+models. If nothing answers on localhost the error says so — it never silently pretends the
+call worked, and the deployed app never takes this path unless a deployer sets that env
+var.
 
 **Caveat:** a small local model produces noticeably weaker synthesis than the hosted
 models. Use Ollama to iterate on plumbing, flow, and prompt *structure* — but validate

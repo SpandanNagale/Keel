@@ -284,6 +284,32 @@ def test_ollama_reads_message_content_and_sets_json_format(fake_ollama):
     assert error is None and result == {"ok": 1}
     assert seen["format"] == "json"
     assert seen["options"] == {"num_predict": llm.MAX_OUTPUT_TOKENS}
+    assert "think" not in seen  # hosted path is left alone
+
+
+def test_local_ollama_disables_thinking_so_json_mode_is_not_starved(fake_ollama):
+    seen = {}
+    fake_ollama(lambda **kw: seen.update(kw) or {"message": {"content": "{}"}})
+    prov = llm.Provider("ollama", api_key="", model="qwen3:14b", host=llm.LOCAL_OLLAMA_HOST)
+    _, error = llm.complete_json("s", "u", provider=prov)
+    assert error is None
+    assert seen["think"] is False
+
+
+def test_local_ollama_retries_without_think_on_old_client(fake_ollama):
+    calls = []
+
+    def handler(**kw):
+        calls.append(kw)
+        if "think" in kw:
+            raise TypeError("chat() got an unexpected keyword argument 'think'")
+        return {"message": {"content": "{}"}}
+
+    fake_ollama(handler)
+    prov = llm.Provider("ollama", api_key="", model="qwen3:14b", host=llm.LOCAL_OLLAMA_HOST)
+    _, error = llm.complete_json("s", "u", provider=prov)
+    assert error is None
+    assert len(calls) == 2 and "think" not in calls[1]
 
 
 def test_ollama_cloud_targets_cloud_host_with_bearer_auth(fake_ollama):

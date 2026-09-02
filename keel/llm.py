@@ -16,10 +16,11 @@ Providers:
   * ``groq``, ``ollama-cloud``, ``anthropic`` — hosted, chosen by which API key
     is configured (``PROVIDER_ORDER``), or forced with ``KEEL_PROVIDER``.
   * ``ollama`` — a **local** daemon at ``http://localhost:11434``, for
-    development only. Selected exclusively via ``KEEL_PROVIDER=ollama``; needs no
-    key. The deployed app never reaches this path unless a deployer explicitly
-    sets that env var, and if it does and nothing answers on localhost the error
-    says so — it never silently degrades to "as if the call succeeded".
+    development only. Selected via ``KEEL_PROVIDER=ollama`` (an OS env var, or a
+    line in ``.streamlit/secrets.toml``); needs no key. The deployed app never
+    reaches this path unless a deployer explicitly opts in, and if it does and
+    nothing answers on localhost the error says so — it never silently degrades
+    to "as if the call succeeded".
 
 Each provider enforces JSON: Groq via a native response mode, Ollama via
 ``format="json"``, Anthropic via an assistant-turn prefill of ``{``. A model that
@@ -40,7 +41,7 @@ DEFAULT_MODELS: dict[str, str] = {
     "groq": "openai/gpt-oss-120b",
     "ollama-cloud": "gpt-oss:120b",
     "anthropic": "claude-haiku-4-5-20251001",
-    "ollama": "llama3.2",
+    "ollama": "qwen3:14b",
 }
 
 # When several hosted keys are present and KEEL_PROVIDER is unset, the first of
@@ -64,7 +65,7 @@ LOCAL_OLLAMA_HOST = "http://localhost:11434"
 # KEEL_VISION_MODEL. Override any of these with KEEL_VISION_MODEL.
 VISION_MODELS: dict[str, str] = {
     "anthropic": "claude-haiku-4-5-20251001",
-    "ollama": "llama3.2-vision",
+    "ollama": "qwen2.5vl:7b",
     "ollama-cloud": "llama3.2-vision",
 }
 VISION_MIME_TYPES = ("image/png", "image/jpeg", "image/webp")
@@ -100,12 +101,17 @@ def resolve_provider(
     Unset -> the first hosted key present, in ``PROVIDER_ORDER``.
     """
     env = env if env is not None else os.environ
-    forced = str(env.get("KEEL_PROVIDER", "")).strip().lower()
+    # KEEL_PROVIDER may come from the OS environment or from secrets.toml (passed
+    # in via ``available``) — the env var wins if both are set.
+    forced = str(
+        env.get("KEEL_PROVIDER", "") or available.get("KEEL_PROVIDER", "")
+    ).strip().lower()
 
     if forced == "ollama":
         model = (
             (model_override or "").strip()
             or str(env.get("KEEL_OLLAMA_MODEL", "")).strip()
+            or str(available.get("KEEL_OLLAMA_MODEL", "")).strip()
             or DEFAULT_MODELS["ollama"]
         )
         return Provider("ollama", api_key="", model=model, host=LOCAL_OLLAMA_HOST), None
@@ -146,11 +152,18 @@ def resolve_vision_provider(
     setup -> ``(None, reason)`` so the caller can degrade with a clear message.
     """
     env = env if env is not None else os.environ
-    forced = str(env.get("KEEL_PROVIDER", "")).strip().lower()
+    forced = str(
+        env.get("KEEL_PROVIDER", "") or available.get("KEEL_PROVIDER", "")
+    ).strip().lower()
     vm = (model_override or "").strip() or str(env.get("KEEL_VISION_MODEL", "")).strip()
 
     if forced == "ollama":
-        model = vm or str(env.get("KEEL_OLLAMA_VISION_MODEL", "")).strip() or VISION_MODELS["ollama"]
+        model = (
+            vm
+            or str(env.get("KEEL_OLLAMA_VISION_MODEL", "")).strip()
+            or str(available.get("KEEL_OLLAMA_VISION_MODEL", "")).strip()
+            or VISION_MODELS["ollama"]
+        )
         return Provider("ollama", api_key="", model=model, host=LOCAL_OLLAMA_HOST), None
 
     anth = str(available.get("ANTHROPIC_API_KEY") or available.get("anthropic") or "").strip()
@@ -300,13 +313,26 @@ def _ollama_raw(system, user, provider, max_tokens, image=None):
     user_msg = {"role": "user", "content": user}
     if image is not None:
         user_msg["images"] = [_b64(image[0])]
+
+    kwargs = dict(
+        model=provider.model,
+        messages=[{"role": "system", "content": system}, user_msg],
+        format="json",
+        options={"num_predict": max_tokens},
+    )
+    # Every Keel call wants a JSON object, never chain-of-thought. A local
+    # reasoning model (e.g. qwen3) otherwise spends the whole num_predict budget
+    # "thinking" and returns empty content under format="json". think=False is a
+    # no-op for non-reasoning models and for Ollama servers too old to know it.
+    if provider.name == "ollama":
+        kwargs["think"] = False
+
     try:
-        response = client.chat(
-            model=provider.model,
-            messages=[{"role": "system", "content": system}, user_msg],
-            format="json",
-            options={"num_predict": max_tokens},
-        )
+        try:
+            response = client.chat(**kwargs)
+        except TypeError:  # ollama client predates the think= parameter
+            kwargs.pop("think", None)
+            response = client.chat(**kwargs)
     except Exception as exc:  # noqa: BLE001
         name = type(exc).__name__.lower()
         text = str(exc).lower()

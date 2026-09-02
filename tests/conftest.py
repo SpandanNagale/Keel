@@ -1,9 +1,25 @@
 from __future__ import annotations
 
+import os
+
 import pytest
 
 from keel import engine
 from keel.models import SessionState, SlotValue
+
+
+@pytest.fixture(autouse=True)
+def _neutral_provider_env(monkeypatch):
+    """Keep the suite hermetic w.r.t. which LLM provider the dev machine points at.
+
+    A local ``.streamlit/secrets.toml`` may pin ``KEEL_PROVIDER = "ollama"`` for
+    manual testing, and Streamlit exports that to ``os.environ`` the first time an
+    ``AppTest`` reads a secret — a real mutation monkeypatch never undoes, so it
+    would leak into every later test. Clear it up front; tests that need a
+    specific provider still set it themselves.
+    """
+    for var in ("KEEL_PROVIDER", "KEEL_MODEL", "KEEL_OLLAMA_MODEL"):
+        monkeypatch.delenv(var, raising=False)
 
 
 @pytest.fixture

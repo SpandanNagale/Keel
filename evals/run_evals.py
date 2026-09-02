@@ -14,6 +14,7 @@ import argparse
 import functools
 import json
 import pathlib
+import re
 import sys
 import tomllib
 from datetime import date
@@ -33,15 +34,18 @@ _RESULTS = _HERE / "RESULTS.md"
 
 # --------------------------------------------------------------------------- #
 def _resolve_provider():
+    # Also honour KEEL_PROVIDER / KEEL_OLLAMA_MODEL from secrets.toml so a local
+    # run can be pinned there instead of exported on every command line.
+    _extra = ("KEEL_PROVIDER", "KEEL_OLLAMA_MODEL")
     available: dict[str, str] = {}
     secrets = _ROOT / ".streamlit" / "secrets.toml"
     if secrets.exists():
         data = tomllib.loads(secrets.read_text("utf-8"))
-        for k in llm.SECRET_KEYS.values():
+        for k in (*llm.SECRET_KEYS.values(), *_extra):
             if data.get(k):
                 available[k] = str(data[k])
     import os
-    for k in llm.SECRET_KEYS.values():
+    for k in (*llm.SECRET_KEYS.values(), *_extra):
         if os.environ.get(k):
             available[k] = os.environ[k]
     return llm.resolve_provider(available)
@@ -199,8 +203,11 @@ def run_fixture(path: pathlib.Path, provider) -> dict:
             session.original_prompt
             + " " + " ".join(v.value for v in session.slots.values())
         )
+        # Ordered-list markers ("1. ", "2. ") in Build order are structure, not
+        # figures — render._scrub_unsupported_figures skips them too.
+        body = re.sub(r"(?m)^(\s*)\d+\.\s", r"\1", _spec_body(md or ""))
         strays = sorted(
-            n for n in _numbers(_spec_body(md or ""))
+            n for n in _numbers(body)
             if n not in known and not render._YEARISH.match(n)
         )
         return {
