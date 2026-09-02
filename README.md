@@ -245,7 +245,7 @@ a non-empty conflict list.
 | Questions asked per session | 8 | `keel/engine.py` |
 | Regenerations per session | 3 | `keel/engine.py` |
 | Output tokens — question | 800 | `keel/llm.py` |
-| Output tokens — synthesis | 3500 | `keel/render.py` |
+| Output tokens — synthesis | 4500 | `keel/render.py` |
 | Output tokens — wireframe | 4000 | `keel/mockup.py` |
 | Shared-key calls per day | 500 | `app.py` |
 | Opening prompt length | 500 chars | `keel/engine.py` |

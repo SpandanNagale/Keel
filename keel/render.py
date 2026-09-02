@@ -68,10 +68,11 @@ _MODEL_SECTION_KEYS = _REQUIRED_MODEL_KEYS + _SOFT_MODEL_KEYS
 # when the session is Quick depth) rather than failing the render.
 _OPTIONAL_SECTION_KEYS = {"decisions", "build_order", "project_structure"}
 
-# Synthesis writes a whole document — and since Phase 2 it enumerates the full
-# interface surface — so it needs a generous budget. Too small and a verbose
-# model runs out mid-JSON and the call hard-fails to the deterministic renderer.
-SYNTHESIS_MAX_TOKENS = 3500
+# Synthesis writes a whole document — the full interface surface, plus (Part B)
+# a Build order and a Project structure — so it needs a generous budget. Too
+# small and a verbose model runs out mid-JSON and the call hard-fails to the
+# deterministic renderer (seen on a live run after the two sections were added).
+SYNTHESIS_MAX_TOKENS = 4500
 
 _DEGRADED_NOTE = (
     "> **Note:** this spec was generated without LLM assistance for at least one "
