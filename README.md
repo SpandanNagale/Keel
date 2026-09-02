@@ -194,10 +194,19 @@ own via the sidebar **API key** field (used for that session only, never stored)
 ## Reference for structure
 
 When you have only a rough notion ("something like Trello"), a blank slot page is hard to
-answer. Paste a **reference URL** on the start screen and Keel scrapes it — via
-[Firecrawl](https://firecrawl.dev), keyed from `FIRECRAWL_API_KEY` in secrets — for
-*structure only*: entities, screens and endpoints, primary flows, and the features a first
-build would deliberately skip. One LLM call turns that into candidate slot values.
+answer. In the reference field on the start screen, give Keel either a **URL** or a
+**product name**:
+
+- a **URL** is scraped directly;
+- a **name** ("something like Harvest") is searched first ([Firecrawl](https://firecrawl.dev)
+  `/v1/search`), and you pick which of the top results is the real site — a wrong
+  resolution silently poisoning every slot is the main failure mode, so the choice is
+  always yours.
+
+Either way Keel then scrapes for *structure only* — via Firecrawl, keyed from
+`FIRECRAWL_API_KEY` in secrets — entities, screens and endpoints, primary flows, and the
+features a first build would deliberately skip. One LLM call turns that into candidate slot
+values.
 
 Nothing enters the spec unconfirmed. A confirm step shows every candidate with the
 reference phrases it came from; you keep, edit, or drop each one (clear the box to drop it).

@@ -99,6 +99,33 @@ def scrape(url: str, *, api_key: str, timeout: int = _TIMEOUT) -> tuple[dict | N
     }, None
 
 
+def search(
+    query: str, *, api_key: str, limit: int = 5, timeout: int = _TIMEOUT
+) -> tuple[list[dict] | None, str | None]:
+    """Web search. Returns ``([{"url","title","description"}, ...], None)`` or
+    ``(None, reason)``. Used by reference Mode A to resolve a product name."""
+    if not (api_key or "").strip():
+        return None, "no Firecrawl API key configured"
+    data, err = _post("/v1/search", {"query": query, "limit": max(1, min(limit, 10))},
+                      api_key, timeout)
+    if err:
+        return None, err
+    raw = (data or {}).get("data") or (data or {}).get("web") or []
+    out: list[dict] = []
+    for it in raw if isinstance(raw, list) else []:
+        if not isinstance(it, dict):
+            continue
+        u = str(it.get("url") or "").strip()
+        if not u:
+            continue
+        out.append({
+            "url": u,
+            "title": str(it.get("title") or "").strip(),
+            "description": str(it.get("description") or it.get("snippet") or "").strip(),
+        })
+    return out, None
+
+
 def map_site(url: str, *, api_key: str, timeout: int = _TIMEOUT) -> tuple[list[str] | None, str | None]:
     """List the URLs Firecrawl can see on the same site. Returns ``(links, None)``
     or ``(None, reason)``."""

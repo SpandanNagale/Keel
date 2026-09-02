@@ -5,9 +5,56 @@ from __future__ import annotations
 import pytest
 
 from keel import engine, firecrawl, llm, reference, render
-from keel.models import Evidence, ReferenceState, SlotCandidate
+from keel.models import Evidence, ReferenceState, SiteCandidate, SlotCandidate
 
 PROV = llm.Provider("groq", "k", "m")
+
+
+# --------------------------------------------------------------------------- #
+# Mode A: product name -> candidate sites
+# --------------------------------------------------------------------------- #
+@pytest.mark.parametrize("text, is_url", [
+    ("https://linear.app", True),
+    ("linear.app", True),
+    ("linear.app/features", True),
+    ("something like Airbnb", False),
+    ("Notion", False),
+    ("my invoicing tool", False),
+])
+def test_looks_like_url(text, is_url):
+    assert reference.looks_like_url(text) is is_url
+
+
+def test_product_query_strips_filler_words():
+    assert reference.product_query("something like Airbnb") == "Airbnb official website"
+    assert reference.product_query("a tool like Linear app") == "Linear official website"
+
+
+def test_resolve_product_ranks_the_official_site_first_and_drops_off_topic(monkeypatch):
+    monkeypatch.setattr(firecrawl, "search", lambda q, *, api_key, limit: ([
+        {"url": "https://www.reddit.com/r/x/comments/1", "title": "reddit thread", "description": ""},
+        {"url": "https://linear.app/features/board", "title": "Linear features", "description": "d"},
+        {"url": "https://linear.app/", "title": "Linear", "description": "the tool"},
+        {"url": "https://someblog.com/linear-review", "title": "review", "description": "r"},
+    ], None))
+    sites, err = reference.resolve_product("Linear", api_key="fc-k")
+    assert err is None
+    assert [s.url for s in sites][0] == "https://linear.app/"          # root of the name-matching host
+    assert all("reddit.com" not in s.url for s in sites)
+    assert all(isinstance(s, SiteCandidate) for s in sites)
+
+
+def test_resolve_product_surfaces_a_search_failure(monkeypatch):
+    monkeypatch.setattr(firecrawl, "search", lambda *a, **k: (None, "Firecrawl HTTP 500"))
+    sites, err = reference.resolve_product("X", api_key="fc-k")
+    assert sites is None and err == "Firecrawl HTTP 500"
+
+
+def test_resolve_product_can_return_no_candidates(monkeypatch):
+    monkeypatch.setattr(firecrawl, "search", lambda *a, **k: (
+        [{"url": "https://www.youtube.com/watch?v=1", "title": "vid", "description": ""}], None))
+    sites, err = reference.resolve_product("X", api_key="fc-k")
+    assert err is None and sites == []
 
 
 # --------------------------------------------------------------------------- #

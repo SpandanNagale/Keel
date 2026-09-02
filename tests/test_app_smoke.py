@@ -390,6 +390,49 @@ def test_reference_url_mode_reaches_the_confirm_view_and_prefills_on_use(monkeyp
     assert not at.exception
 
 
+def test_reference_name_mode_shows_a_site_picker_then_the_candidates(monkeypatch):
+    def llm(system, user, **kw):
+        if _reference_call(system):
+            return {"product": "Linear", "core_entities": ["Issue", "Project"],
+                    "surfaces": ["board view"], "primary_flows": ["create an issue"],
+                    "notable_features": [], "features_likely_out_of_scope_for_a_clone": ["SSO"]}, None
+        return _happy_llm(system, user, **kw)
+
+    monkeypatch.setattr("keel.llm.complete_json", llm)
+    monkeypatch.setattr("keel.firecrawl.search", lambda q, **kw: ([
+        {"url": "https://linear.app/", "title": "Linear", "description": "the tool"},
+        {"url": "https://blog.example.com/linear", "title": "a review", "description": ""},
+    ], None))
+    monkeypatch.setattr("keel.firecrawl.scrape",
+                        lambda url, **kw: ({"markdown": "issue tracker " * 200,
+                                            "metadata": {}, "url": url}, None))
+
+    at = AppTest.from_file("app.py")
+    at.secrets["ANTHROPIC_API_KEY"] = "sk-ant-smoke"
+    at.secrets["FIRECRAWL_API_KEY"] = "fc-smoke"
+    at.run()
+    at.text_area(key="idea_input").set_value("something to track my team's work")
+    at.run()
+    at.text_input(key="ref_url").set_value("something like Linear")
+    at.run()
+    _btn(at, "Fetch reference & continue").click()
+    at.run()
+
+    # disambiguation phase: sites listed, no evidence yet
+    ref = at.session_state.pending_session.reference
+    assert ref.mode == "name" and ref.evidence is None and len(ref.site_candidates) >= 1
+    blob = "\n".join(m.value for m in at.markdown)
+    assert "Pick the site" in blob and "linear.app" in blob
+
+    _btn(at, "Use this site").click()   # first site
+    at.run()
+
+    ref = at.session_state.pending_session.reference
+    assert ref.evidence is not None and ref.evidence.product == "Linear"
+    assert ref.candidates and at.session_state.session is None   # still staged, not started
+    assert not at.exception
+
+
 def test_reference_can_be_skipped_from_the_confirm_view(monkeypatch):
     at = _drive_to_reference_confirm(monkeypatch, {
         "product": "X", "core_entities": ["Thing"], "surfaces": ["a page"],

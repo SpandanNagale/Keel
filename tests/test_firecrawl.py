@@ -75,6 +75,27 @@ def test_scrape_without_a_key_never_calls_the_api(monkeypatch):
     assert calls == []
 
 
+def test_search_returns_url_title_description_triples(monkeypatch):
+    _stub_post(monkeypatch, {"data": [
+        {"url": "https://a.com", "title": "A", "description": "the a"},
+        {"url": "https://b.com", "snippet": "the b"},
+        {"title": "no url"},
+        "junk",
+    ]})
+    hits, err = firecrawl.search("a product", api_key="fc-k")
+    assert err is None
+    assert hits == [
+        {"url": "https://a.com", "title": "A", "description": "the a"},
+        {"url": "https://b.com", "title": "", "description": "the b"},
+    ]
+
+
+def test_search_without_a_key_is_an_error(monkeypatch):
+    calls = _stub_post(monkeypatch, {"data": []})
+    hits, err = firecrawl.search("x", api_key="")
+    assert hits is None and "no Firecrawl API key" in err and calls == []
+
+
 def test_map_site_normalises_the_link_list(monkeypatch):
     _stub_post(monkeypatch, {"links": ["https://ex.com", "https://ex.com/pricing", 42, None]})
     links, err = firecrawl.map_site("https://ex.com", api_key="fc-k")

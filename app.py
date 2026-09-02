@@ -229,12 +229,13 @@ def _begin_questions(session, byok: str, byok_provider: str, *, extract: bool) -
 
 
 def _fetch_reference(
-    prompt: str, template_name: str, depth: str, ref_url: str,
+    prompt: str, template_name: str, depth: str, ref_input: str,
     byok: str, byok_provider: str,
 ) -> None:
-    """Mode B: scrape a pasted URL, extract structural evidence, and stage a
-    session with candidate slot values for the user to confirm. Costs one
-    Firecrawl fetch (up to 3) plus one LLM call, all counted against the caps."""
+    """Stage a session for reference confirmation. A URL goes straight to the
+    scrape pipeline (Mode B); anything else is treated as a product name and
+    searched first, so the user can pick which site to borrow from (Mode A).
+    Costs one Firecrawl call plus (for a URL) one LLM call, counted against caps."""
     prompt = prompt.strip()
     if not prompt or len(prompt) > MAX_PROMPT_CHARS:
         st.session_state.start_error = (
@@ -258,12 +259,49 @@ def _fetch_reference(
     session = engine.start_session(
         prompt, template_name, created_date=date.today().isoformat(), depth=depth
     )
+    ref_input = ref_input.strip()
+
+    if reference.looks_like_url(ref_input):
+        session.reference = ReferenceState(mode="url", query=ref_input,
+                                           chosen_url=ref_input)
+        err = _build_reference_from_url(session, ref_input, fc_key,
+                                        byok, byok_provider)
+        if err:
+            st.session_state.start_error = err
+            return
+    else:
+        sites, err = reference.resolve_product(ref_input, api_key=fc_key)
+        if err:
+            st.session_state.start_error = f"Could not search for that product — {err}"
+            return
+        if not sites:
+            st.session_state.start_error = (
+                f"No official site found for “{ref_input}”. Start without a reference, "
+                "or paste a URL directly."
+            )
+            return
+        session.reference = ReferenceState(mode="name", query=ref_input,
+                                           site_candidates=sites)
+
+    _clear_candidate_widgets()
+    st.session_state.pending_session = session
+    st.session_state.start_error = None
+
+
+def _build_reference_from_url(
+    session, url: str, fc_key: str, byok: str, byok_provider: str
+) -> str | None:
+    """Scrape ``url`` -> evidence -> candidates, onto ``session.reference``.
+    Returns an error string or None. Shared by Mode B and Mode A's site pick."""
+    provider, is_shared, blocking = _provider_for_call(byok, byok_provider)
+    if blocking is not None:
+        return f"Reference intake needs an LLM — {blocking}"
+
     material, err = reference.gather_material(
-        ref_url, api_key=fc_key, fetch_budget=reference.MAX_REFERENCE_FETCHES
+        url, api_key=fc_key, fetch_budget=reference.MAX_REFERENCE_FETCHES
     )
     if err:
-        st.session_state.start_error = f"Could not use that reference — {err}"
-        return
+        return f"Could not use that reference — {err}"
 
     if is_shared:
         _record_shared_call()
@@ -271,23 +309,35 @@ def _fetch_reference(
         material["material"], session=session, provider=provider
     )
     if err:
-        st.session_state.start_error = f"Could not read that reference — {err}"
-        return
+        return f"Could not read that reference — {err}"
 
-    template = _load_template(template_name)
+    template = _load_template(session.template_name)
     candidates = reference.evidence_to_candidates(evidence, template)
     if not candidates:
-        st.session_state.start_error = (
-            "That reference did not yield anything concrete to borrow. Start without it."
-        )
-        return
+        return "That reference did not yield anything concrete to borrow. Start without it."
 
-    session.reference = ReferenceState(
-        mode="url", query=ref_url.strip(), source_urls=material["urls"],
-        fetch_count=material["fetches"], evidence=evidence, candidates=candidates,
+    ref = session.reference
+    ref.chosen_url = material["urls"][0] if material["urls"] else url
+    ref.site_candidates = []
+    ref.source_urls = material["urls"]
+    ref.fetch_count = material["fetches"]
+    ref.evidence = evidence
+    ref.candidates = candidates
+    return None
+
+
+def _resolve_reference_pick(url: str, byok: str, byok_provider: str) -> None:
+    """Mode A: the user chose one of the searched sites; run the scrape pipeline."""
+    session = st.session_state.pending_session
+    if not session or not session.reference:
+        return
+    err = _build_reference_from_url(
+        session, url, _secret("FIRECRAWL_API_KEY"), byok, byok_provider
     )
-    _clear_candidate_widgets()
-    st.session_state.pending_session = session
+    if err:
+        st.session_state.start_error = err
+        session.reference.site_candidates = []  # don't loop on the picker
+        return
     st.session_state.start_error = None
 
 
@@ -579,12 +629,13 @@ def _view_intro(byok: str, byok_provider: str) -> None:
 
     fc_configured = bool(_secret("FIRECRAWL_API_KEY").strip())
     ref_url = st.text_input(
-        "Reference URL for structure (optional)",
-        key="ref_url", placeholder="https://linear.app — a product to borrow structure from",
+        "Reference for structure — a URL or a product name (optional)",
+        key="ref_url", placeholder="https://linear.app  ·  or  ·  something like Trello",
         disabled=not fc_configured,
-        help="Keel scrapes it for structure only — entities, screens, likely non-goals — "
-        "and shows every candidate to keep, edit, or drop before it enters the spec. "
-        "Names, wording, and visual design are never carried across.",
+        help="A URL is scraped directly; a name is searched first so you can pick the "
+        "site. Keel takes structure only — entities, screens, likely non-goals — and "
+        "shows every candidate to keep, edit, or drop before it enters the spec. Names, "
+        "wording, and visual design are never carried across.",
     )
     if not fc_configured:
         st.caption("Set `FIRECRAWL_API_KEY` in secrets to enable reference intake.")
@@ -626,6 +677,33 @@ def _view_reference_confirm(byok: str, byok_provider: str) -> None:
     session = st.session_state.pending_session
     ref = session.reference
     st.subheader("Reference for structure")
+
+    # Mode A, disambiguation phase: a product name was searched, no site chosen yet.
+    if ref.evidence is None and ref.site_candidates:
+        st.markdown(
+            f"Searched for **{html.escape(ref.query)}**. Pick the site to borrow "
+            "structure from:"
+        )
+        for i, cand in enumerate(ref.site_candidates):
+            title = cand.title or cand.url
+            st.markdown(
+                f"**{html.escape(title)}**  \n{html.escape(cand.url)}"
+                + (f"  \n_{html.escape(cand.description[:200])}_" if cand.description else "")
+            )
+            if st.button("Use this site", key=f"ref_pick_{i}"):
+                _resolve_reference_pick(cand.url, byok, byok_provider)
+                st.rerun()
+            st.divider()
+        if st.button("None of these — start without a reference", key="ref_pick_none"):
+            _skip_reference(byok, byok_provider)
+            st.rerun()
+        if st.button("Back to the idea", key="ref_pick_back"):
+            _discard_pending()
+            st.rerun()
+        if st.session_state.start_error:
+            st.warning(st.session_state.start_error)
+        return
+
     ev = ref.evidence
     if ev and ev.product:
         st.markdown(f"Resolved to **{html.escape(ev.product)}**.")

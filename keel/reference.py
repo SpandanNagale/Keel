@@ -14,10 +14,14 @@ module is plain, testable Python.
 """
 from __future__ import annotations
 
+import re
+from urllib.parse import urlparse
+
 from keel import engine, firecrawl, llm
-from keel.models import Evidence, SessionState, SlotCandidate, Template
+from keel.models import Evidence, SessionState, SiteCandidate, SlotCandidate, Template
 
 MAX_REFERENCE_FETCHES = 3
+MAX_SITE_CANDIDATES = 3
 _THIN_PAGE_CHARS = 1500       # below this, the home page is treated as a thin landing page
 _TOTAL_MATERIAL_CHARS = 14000
 # The evidence JSON is small, but a reasoning model (Groq gpt-oss) spends most of
@@ -43,6 +47,69 @@ Rules:
 - Each list item is a short noun or verb phrase, not a sentence. 3-8 items per list is plenty.
 - If the text does not support a key, use an empty list (or "" for "product").
 - Do not invent features the text does not mention."""
+
+
+# --------------------------------------------------------------------------- #
+# Mode A: a product name -> a handful of candidate official sites to pick from
+# --------------------------------------------------------------------------- #
+_NAME_STOP = {
+    "something", "like", "similar", "to", "a", "an", "the", "app", "application",
+    "tool", "clone", "of", "kinda", "sort", "for", "site", "website", "service",
+    "platform", "my", "own",
+}
+# Sites that are never the product's own structural reference.
+_OFF_TOPIC_HOSTS = (
+    "reddit.com", "substack.com", "medium.com", "youtube.com", "youtu.be",
+    "wikipedia.org", "twitter.com", "x.com", "facebook.com", "linkedin.com",
+    "news.ycombinator.com", "quora.com", "producthunt.com", "g2.com",
+    "capterra.com", "crunchbase.com", "glassdoor.com", "indeed.com",
+    "play.google.com", "apps.apple.com", "github.com", "gitlab.com",
+    "trustpilot.com", "getapp.com", "softwareadvice.com",
+)
+
+
+def looks_like_url(text: str) -> bool:
+    t = (text or "").strip().lower()
+    if re.match(r"^[a-z][a-z0-9+.\-]*://", t):
+        return True
+    return bool(re.match(r"^[a-z0-9][a-z0-9-]*(\.[a-z0-9-]+)+(/|\?|#|$)", t))
+
+
+def product_query(name: str) -> str:
+    words = [w for w in re.findall(r"[A-Za-z0-9.+&-]+", name or "")
+             if w.lower() not in _NAME_STOP]
+    core = " ".join(words).strip() or (name or "").strip()
+    return f"{core} official website"
+
+
+def _rank_official(name: str, results: list[dict]) -> list[dict]:
+    tokens = [w.lower() for w in re.findall(r"[A-Za-z0-9]+", name or "")
+              if w.lower() not in _NAME_STOP and len(w) > 1]
+    best: dict[str, tuple[int, dict]] = {}   # host -> (score, result), shallowest wins
+    for i, r in enumerate(results):
+        host = (urlparse(r["url"]).hostname or "").lower()
+        host = host[4:] if host.startswith("www.") else host
+        if not host or any(host == h or host.endswith("." + h) for h in _OFF_TOPIC_HOSTS):
+            continue
+        depth = urlparse(r["url"]).path.rstrip("/").count("/")
+        name_hit = any(tok in host for tok in tokens)
+        score = (5 if name_hit else 0) - depth - i * 0.1  # search order breaks ties
+        if host not in best or score > best[host][0]:
+            best[host] = (score, r)
+    return [r for _, r in sorted(best.values(), key=lambda t: t[0], reverse=True)]
+
+
+def resolve_product(
+    name: str, *, api_key: str, limit: int = MAX_SITE_CANDIDATES
+) -> tuple[list[SiteCandidate] | None, str | None]:
+    """Search for a product's own site. Returns up to ``limit`` candidates for the
+    user to choose from (possibly empty — then they proceed without a reference),
+    or ``(None, reason)`` on a search failure."""
+    hits, err = firecrawl.search(product_query(name), api_key=api_key, limit=limit + 4)
+    if err:
+        return None, err
+    ranked = _rank_official(name, hits or [])[:limit]
+    return [SiteCandidate(**r) for r in ranked], None
 
 
 # --------------------------------------------------------------------------- #

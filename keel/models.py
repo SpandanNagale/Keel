@@ -104,9 +104,18 @@ class SlotCandidate(BaseModel):
     decision: str = "keep"      # "keep" | "drop"
 
 
+class SiteCandidate(BaseModel):
+    url: str
+    title: str = ""
+    description: str = ""
+
+
 class ReferenceState(BaseModel):
-    mode: str                                   # "url" (Phase 1); "name" / "image" later
-    query: str = ""                             # the raw URL or product name given
+    mode: str                                   # "url" | "name" | "image"
+    query: str = ""                             # the raw URL, product name, or image filename
+    # Mode A only: search hits awaiting the user's pick. Empty once one is chosen.
+    site_candidates: list[SiteCandidate] = Field(default_factory=list)
+    chosen_url: Optional[str] = None
     source_urls: list[str] = Field(default_factory=list)
     fetch_count: int = 0
     evidence: Optional[Evidence] = None
