@@ -80,7 +80,7 @@ def run_case(case: dict, provider, persona_provider) -> dict:
         slot = engine.current_slot(session, template)
         if slot is None:
             break
-        q, rec, _ = engine.next_question(session, template, provider=provider)
+        q, rec, q_err = engine.next_question(session, template, provider=provider)
         asked.append(slot.name)
         questions.append(q)
         established = [f"{n}: {v.value}" for n, v in session.slots.items() if v.value]
@@ -88,7 +88,10 @@ def run_case(case: dict, provider, persona_provider) -> dict:
         if action == "skip":
             engine.skip_slot(session, slot.name)
         else:
-            engine.accept_answer(session, slot.name, text, recommended=rec)
+            engine.accept_answer(
+                session, slot.name, text, recommended=rec,
+                recommended_source="template_default" if q_err else "llm_default",
+            )
 
     engine.fill_unasked_slots(session, template, provider=provider)
     conflicts, conflict_err = render.check_conflicts(session, provider=provider)
@@ -165,6 +168,9 @@ def run_fixture(path: pathlib.Path, provider) -> dict:
         return {"id": path.stem, "result": "LOAD-FAIL", "detail": err}
     conflicts, cerr = render.check_conflicts(session, provider=provider)
     session.conflicts, session.conflict_check_error = conflicts, cerr
+    # synthesize_spec re-validates conflicts against the document and reduces
+    # session.conflicts to the survivors (Bug 2). We check detection against the
+    # pre-synthesis list; the survivor/resolved counts show the re-validation.
     md, serr = render.synthesize_spec(session, provider=provider,
                                       conflicts=conflicts, conflict_error=cerr)
     blob = " ".join(
@@ -177,6 +183,8 @@ def run_fixture(path: pathlib.Path, provider) -> dict:
     return {
         "id": path.stem,
         "n_conflicts": len(conflicts),
+        "survived": len(session.conflicts),
+        "resolved": len(session.resolved_conflicts),
         "caught": caught,
         "synth": "fell-back" if serr else "ok",
         "result": "PASS" if (caught and cerr is None) else "FAIL",
@@ -239,12 +247,13 @@ def write_results(rows: list[dict], fixtures: list[dict], provider, persona_mode
         out.append("")
 
     out.append("## Regression fixtures\n")
-    out.append("| Fixture | Conflicts | Caught | Synthesis | Result |")
-    out.append("|---|--:|:--:|:--:|:--:|")
+    out.append("| Fixture | Conflicts | Survived | Resolved | Caught | Synthesis | Result |")
+    out.append("|---|--:|--:|--:|:--:|:--:|:--:|")
     for f in fixtures:
         out.append(
-            f"| {f['id']} | {f.get('n_conflicts', '—')} | "
-            f"{'yes' if f.get('caught') else 'no'} | {f.get('synth', '—')} | {f['result']} |"
+            f"| {f['id']} | {f.get('n_conflicts', '—')} | {f.get('survived', '—')} | "
+            f"{f.get('resolved', '—')} | {'yes' if f.get('caught') else 'no'} | "
+            f"{f.get('synth', '—')} | {f['result']} |"
         )
     out.append("")
 

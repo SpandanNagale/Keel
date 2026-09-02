@@ -43,6 +43,6 @@ def stub_llm(monkeypatch):
 
 def filled(**names_to_values) -> dict[str, SlotValue]:
     return {
-        name: SlotValue(value=val, source="defaulted")
+        name: SlotValue(value=val, source="llm_default")
         for name, val in names_to_values.items()
     }

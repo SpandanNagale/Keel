@@ -18,7 +18,7 @@ def _session():
     }
     s.conflicts = [{"slots": ["scale", "constraints"], "conflict": "x", "suggested_resolution": "y"}]
     s.conflict_check_error = None
-    s.degraded = True
+    s.synthesis_failed = True
     s.finished = True
     s.call_count = 7
     s.regen_count = 1

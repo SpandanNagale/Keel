@@ -23,11 +23,14 @@ must never reach the output — there are tests that assert it for both paths.
 """
 from __future__ import annotations
 
+import logging
 import math
 import re
 
 from keel import engine, llm
 from keel.models import SessionState, Template
+
+_log = logging.getLogger("keel.render")
 
 # (heading rendered, JSON key the synthesis model must return)
 SECTION_ORDER: list[tuple[str, str]] = [
@@ -70,11 +73,12 @@ _SYNTHESIS_SYSTEM = """You are Keel. You write a software specification that a c
 implement literally. You are given a one-line project idea and the answers a developer gave to a \
 fixed set of clarifying questions. Turn them into ONE coherent document.
 
-Return ONLY a JSON object with exactly these string keys, and no others:
+Return ONLY a JSON object with exactly these keys, and no others:
   "context", "objective", "io_contract", "constraints", "acceptance_criteria",
-  "non_goals", "open_questions"
-Each value is the markdown BODY of that section — sentences and/or bullet lists. Do NOT include \
-the section heading itself. Do NOT add, rename, reorder, or drop keys.
+  "non_goals", "open_questions", "resolved_conflicts"
+The first seven values are the markdown BODY of that section — sentences and/or bullet lists. \
+Do NOT include the section heading itself. Do NOT add, rename, reorder, or drop keys.
+"resolved_conflicts" is a JSON ARRAY (possibly empty) — see the contradiction rule below.
 
 How to write it:
 
@@ -98,12 +102,15 @@ How to write it:
 - Put every fact in the section it belongs to, regardless of which answer it arrived in. \
   Runtime and scale details are CONSTRAINTS — put them under "constraints", never under \
 "context". "context" holds the original idea and background only.
-- Before writing, scan every answer against the others for contradictions (e.g. authentication \
-  required in one answer but listed as a non-goal in another; a project that is a website whose \
-  non-goals forbid a UI). If two answers conflict, write each section for the more specific and \
-  more recently given answer so the document stays internally consistent — never state both \
-  sides as true. A separate step records contradictions for the developer, so do NOT list them \
-  in "open_questions" yourself.
+- You are given a list of contradictions a separate check already found. For each one your \
+  document silences — by writing every section for the more specific and more recently given \
+  answer so the document stays internally consistent — add an entry to "resolved_conflicts": \
+  {"conflict": "<the contradiction text you were given, verbatim or near>", "how": "<the one \
+  choice you made, e.g. 'treated it as a browser app and kept the pages; dropped the no-UI \
+  non-goal'>"}. If your document leaves a contradiction genuinely unresolved, do NOT invent a \
+  resolution — leave it out of the array. If you were given no contradictions, return []. \
+  Never state both sides of a conflict as true, and never list contradictions in \
+  "open_questions" yourself — that section is rebuilt mechanically.
 - Do NOT invent specifics the developer did not supply. No made-up numbers, versions, quotas, \
   latencies, request rates, or product names. If no traffic figure was given, write "low, \
   single-instance traffic" — not "0.3 requests/second". This is a hard rule.
@@ -195,8 +202,9 @@ def check_conflicts(
     """One capped LLM call, made before :func:`synthesize_spec`, that looks for
     contradictions between the answers and for capabilities in the original idea
     that no answer covers. Returns ``(conflicts, None)`` on success or
-    ``([], reason)`` on failure — the caller records the reason and Keel notes in
-    "Open questions" that the check could not run. Never silently skipped."""
+    ``([], reason)`` on failure — the reason is also recorded on
+    ``session.conflict_check_error`` so the document notes the check could not run
+    and ``session.degraded`` reflects it. Never silently skipped."""
     user = (
         f'Original idea: "{session.original_prompt}"\n\n'
         f"Answers collected, one per dimension:\n{_answers_block(session)}\n\n"
@@ -206,8 +214,9 @@ def check_conflicts(
         session, _CONFLICT_SYSTEM, user, provider=provider, max_tokens=_CONFLICT_MAX_TOKENS
     )
     if error is not None:
-        session.degraded = True
+        session.conflict_check_error = error
         return [], error
+    session.conflict_check_error = None
 
     raw = (result or {}).get("conflicts", [])
     conflicts: list[dict] = []
@@ -247,9 +256,12 @@ def synthesize_spec(
     :func:`render_markdown`.
 
     ``conflicts`` / ``conflict_error`` come from :func:`check_conflicts`, run
-    first. They are given to the synthesis model as context and are then written
-    into "Open questions" mechanically here — the model never controls whether a
-    conflict is reported. When omitted, the values already on ``session`` are used."""
+    first. They are given to the synthesis model as context; afterwards each is
+    re-validated against the document that was produced (see
+    :func:`_revalidate_conflicts`). Survivors are written into "Open questions"
+    mechanically here — the model never controls whether a conflict is reported —
+    and resolved ones land on ``session.resolved_conflicts``. When ``conflicts``
+    is omitted, the value already on ``session`` is used."""
     if conflicts is not None:
         session.conflicts = conflicts
     if conflict_error is not None:
@@ -289,10 +301,20 @@ def _assemble_and_validate(
             return None, f"synthesis produced no '{key}' section"
         bodies[key] = body
 
-    # "Open questions" is rebuilt here, in Python: the conflict list from
-    # check_conflicts, plus deterministic checks the model does not run
-    # (fabricated numbers, criteria that restate constraints, missing sensitive-
-    # domain disclaimer). The model never decides whether a conflict is reported.
+    # Bug 2: the conflict list was computed against the *answers*. Synthesis may
+    # have silenced some of them. Re-validate each against the document it just
+    # produced — resolved ones move to session.resolved_conflicts (shown in the
+    # UI, never in Open questions); only survivors go on to _build_open_questions.
+    surviving, resolved = _revalidate_conflicts(
+        session, session.conflicts, bodies, sections.get("resolved_conflicts")
+    )
+    session.conflicts = surviving
+    session.resolved_conflicts = resolved
+
+    # "Open questions" is rebuilt here, in Python: the surviving conflict list,
+    # plus deterministic checks the model does not run (fabricated numbers,
+    # criteria that restate constraints, missing sensitive-domain disclaimer).
+    # The model never decides whether a conflict is reported.
     bodies["open_questions"] = _build_open_questions(session, template, bodies)
 
     # Hardcoded-secret scan + scrub.
@@ -420,6 +442,120 @@ _STOP = {
 
 def _line_tokens(line: str) -> set[str]:
     return set(re.findall(r"[a-z0-9]+", line.lower())) - _STOP
+
+
+# --------------------------------------------------------------------------- #
+# Bug 2: re-validate conflicts against the document synthesis actually produced
+# --------------------------------------------------------------------------- #
+_RESOLVED_MATCH_THRESHOLD = 0.34   # Jaccard on salient tokens: model-report <-> conflict
+_DOC_COVERAGE_THRESHOLD = 0.7      # fraction of a conflict's salient words now in the doc
+
+# A conflict is only ever "resolved by the document" if it is about a missing or
+# forbidden capability — the doc can then be shown to describe it. A direct value
+# contradiction (offline vs. a hosted model) is never resolved just because both
+# terms reappear in the prose. Matched as whole words, so "cannot" is not "not".
+_DRIFT_MARKER_WORDS = frozenset({
+    "no", "not", "does", "doesn't", "lacks", "lack", "missing", "none", "never",
+    "without", "absent", "undefined", "unspecified", "unaddressed", "omits", "omit",
+    "forbid", "forbids", "forbidden", "excludes", "rules",
+})
+
+
+def _salient(text: str) -> set[str]:
+    return {w for w in re.findall(r"[a-z0-9]{4,}", text.lower())} - _STOP
+
+
+def _jaccard(a: set[str], b: set[str]) -> float:
+    return len(a & b) / len(a | b) if (a or b) else 0.0
+
+
+def _model_resolution_for(conflict_text: str, model_resolved: list) -> str | None:
+    """The model's own stated resolution for this conflict, if it reported one
+    close enough to be the same conflict."""
+    ct = _salient(conflict_text)
+    best_score, best_how = 0.0, ""
+    for r in model_resolved:
+        if not isinstance(r, dict):
+            continue
+        score = _jaccard(ct, _salient(str(r.get("conflict", ""))))
+        if score > best_score:
+            best_score, best_how = score, str(r.get("how", "")).strip()
+    if best_score >= _RESOLVED_MATCH_THRESHOLD:
+        return best_how or "resolved during synthesis"
+    return None
+
+
+def _doc_resolves(conflict: dict, doc_blob: str) -> bool:
+    """Whether the rendered document plainly now covers what the conflict said
+    was missing. Only applied to *premise drift* — a conflict the checker tagged
+    with "original idea", i.e. "a capability in the idea that no answer covers".
+    A direct value clash between two real slots is never dropped this way, even
+    if both its terms happen to reappear in the prose."""
+    slots = [str(s).strip().lower() for s in (conflict.get("slots") or [])]
+    if "original idea" not in slots:
+        return False
+    ctext = str(conflict.get("conflict", ""))
+    words = set(re.findall(r"[a-z']+", ctext.lower()))
+    if not (words & _DRIFT_MARKER_WORDS):
+        return False
+    tokens = _salient(ctext)
+    if len(tokens) < 3:
+        return False
+    present = sum(1 for t in tokens if t in doc_blob)
+    return present / len(tokens) >= _DOC_COVERAGE_THRESHOLD
+
+
+def _revalidate_conflicts(
+    session: SessionState,
+    pre_conflicts: list[dict] | None,
+    bodies: dict[str, str],
+    model_resolved,
+) -> tuple[list[dict], list[dict]]:
+    """Split the pre-synthesis conflicts into (surviving, resolved).
+
+    A conflict is resolved when the synthesis model reported resolving it, or
+    when the rendered document plainly now covers a capability the conflict said
+    was missing. Anything the model claims to have resolved that was never raised
+    — and anything the document silently resolved without a report — is logged.
+    """
+    pre = [c for c in (pre_conflicts or []) if isinstance(c, dict)]
+    model_resolved = [r for r in (model_resolved or []) if isinstance(r, dict)]
+    doc_blob = " ".join(
+        bodies.get(k, "")
+        for k in ("context", "objective", "io_contract", "constraints",
+                  "acceptance_criteria", "non_goals")
+    ).lower()
+
+    surviving: list[dict] = []
+    resolved: list[dict] = []
+    for c in pre:
+        ctext = str(c.get("conflict", "")).strip()
+        how = _model_resolution_for(ctext, model_resolved)
+        if how is not None:
+            resolved.append({**c, "resolution": how})
+            continue
+        if _doc_resolves(c, doc_blob):
+            resolved.append({
+                **c,
+                "resolution": "Resolved in the synthesized document; the check ran "
+                "against the answers, before synthesis.",
+            })
+            _log.warning("synthesis silently resolved a conflict it did not report: %s", ctext)
+            continue
+        surviving.append(c)
+
+    pre_salient = [_salient(str(c.get("conflict", ""))) for c in pre]
+    for r in model_resolved:
+        rt = str(r.get("conflict", "")).strip()
+        if not rt:
+            continue
+        if max((_jaccard(_salient(rt), p) for p in pre_salient), default=0.0) < \
+                _RESOLVED_MATCH_THRESHOLD:
+            _log.warning(
+                "synthesis reported resolving a conflict absent from the "
+                "pre-synthesis set: %s", rt
+            )
+    return surviving, resolved
 
 
 def _restatement_bullets(

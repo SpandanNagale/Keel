@@ -10,9 +10,19 @@ from typing import Literal, Optional
 
 from pydantic import BaseModel, Field
 
-# How a slot came to hold its value. Rendered specs and the "Open questions"
-# section key off these.
-SlotSource = Literal["extracted", "asked", "defaulted", "skipped"]
+# How a slot came to hold its value. Rendered specs, the sidebar, and the
+# "Open questions" section key off these.
+#
+#   extracted        - pulled from the user's original prompt
+#   asked            - the user typed this answer (or edited it in review)
+#   llm_default      - an LLM generated a contextual default; the user accepted it
+#   template_default - static YAML fallback text; the LLM was unavailable
+#   skipped          - the user declined to answer
+#
+# The split between llm_default and template_default matters: only the latter is
+# a genuine degradation. A uniform "Keel default" label was Bug 1 — it made the
+# sidebar and the degraded banner lie about a document full of contextual detail.
+SlotSource = Literal["extracted", "asked", "llm_default", "template_default", "skipped"]
 
 # Fixed output sections, in render order. Every slot's ``section`` must be one of
 # these; ``context`` also absorbs the opening prompt and the degraded note.
@@ -83,7 +93,9 @@ class SessionState(BaseModel):
     current_index: int = 0
     questions_asked: int = 0
     call_count: int = 0
-    degraded: bool = False
+    # Set only when the synthesis LLM call itself failed and the document fell
+    # back to the deterministic renderer. Contributes to ``degraded`` below.
+    synthesis_failed: bool = False
     finished: bool = False
     # How many times the spec has been regenerated from edited answers (review
     # step). Capped; see engine.MAX_REGENERATIONS.
@@ -95,6 +107,27 @@ class SessionState(BaseModel):
     # Reason the conflict check could not run, if it failed. Surfaced in the
     # output as an explicit "checking was unavailable" note — never silently dropped.
     conflict_check_error: Optional[str] = None
+    # Contradictions that the synthesis pass resolved (verified against the
+    # rendered document afterwards). Each entry keeps the original conflict fields
+    # plus "resolution". Shown in the UI as "Resolved during synthesis"; never
+    # written into "Open questions" — only surviving conflicts go there.
+    resolved_conflicts: list[dict] = Field(default_factory=list)
+
+    @property
+    def degraded(self) -> bool:
+        """Whether the finished document genuinely fell back.
+
+        True only when a slot is on static template text, or the conflict-check
+        or synthesis call actually failed. An earlier failure that did not change
+        the final document (a missed extraction, one re-tried question) must NOT
+        trip this — Bug 1 was a sticky flag that cried wolf over a document full
+        of contextual detail.
+        """
+        return (
+            self.synthesis_failed
+            or self.conflict_check_error is not None
+            or any(v.source == "template_default" for v in self.slots.values())
+        )
 
     def title(self) -> str:
         text = " ".join(self.original_prompt.split()).strip().rstrip(".")

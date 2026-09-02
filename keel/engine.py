@@ -10,8 +10,11 @@ The two call sites:
 
 Both go through :func:`capped_complete_json`, which enforces the per-session call
 cap and returns a ``(result, error)`` tuple. Failure is never silent: the error
-string is handed back to the caller to surface, and ``session.degraded`` is set.
-The one-shot synthesis pass in :mod:`keel.render` uses the same capped helper.
+string is handed back to the caller to surface. Whether that failure *degrades*
+the finished document is a separate question — see ``SessionState.degraded``,
+which keys off template-default slots and a failed synthesis/conflict call, not
+off every transient error. The one-shot synthesis pass in :mod:`keel.render`
+uses the same capped helper.
 """
 from __future__ import annotations
 
@@ -200,15 +203,28 @@ def _advance(session: SessionState) -> None:
         session.finished = True
 
 
-def accept_answer(session: SessionState, slot_name: str, text: str, *, recommended: str) -> None:
-    """Record an answer. If the text is unchanged from the recommended default,
-    the source is ``defaulted``; otherwise ``asked``."""
+def accept_answer(
+    session: SessionState,
+    slot_name: str,
+    text: str,
+    *,
+    recommended: str,
+    recommended_source: str = "llm_default",
+) -> None:
+    """Record an answer.
+
+    If the developer edited the recommendation, the source is ``asked``. If they
+    accepted it unchanged (or left the box empty), the source is
+    ``recommended_source`` — ``llm_default`` when the recommendation came from the
+    model, ``template_default`` when the question call had failed and the box was
+    pre-filled with the slot's static ``default_text``. The caller knows which.
+    """
     text = text.strip()
     if not text:
         text = recommended.strip()
-        source = "defaulted"
+        source = recommended_source
     else:
-        source = "defaulted" if text == recommended.strip() else "asked"
+        source = recommended_source if text == recommended.strip() else "asked"
     session.slots[slot_name] = SlotValue(value=text, source=source)
     session.questions_asked += 1
     _advance(session)
@@ -225,7 +241,7 @@ def fill_remaining_defaults(session: SessionState, template: Template) -> None:
     use template defaults" path."""
     for s in template.slots:
         if session.slots.get(s.name) is None:
-            session.slots[s.name] = SlotValue(value=s.default_text, source="defaulted")
+            session.slots[s.name] = SlotValue(value=s.default_text, source="template_default")
     session.finished = True
 
 
@@ -266,9 +282,9 @@ def fill_unasked_slots(
     """Fill every slot that was never asked (depth or the asked-question cap left
     it out) with a value inferred from the accumulated answers — one LLM call for
     all of them. Any slot the model does not return, or the whole call on failure,
-    falls back to the static ``default_text``. Returns an error string (and sets
-    ``session.degraded``) if the call failed, else ``None``. Always marks the
-    session finished."""
+    falls back to the static ``default_text`` and is marked ``template_default``
+    (which is what drives ``session.degraded``). Returns an error string if the
+    call failed, else ``None``. Always marks the session finished."""
     missing = [
         s
         for s in sorted(template.slots, key=lambda s: (s.priority, s.name))
@@ -290,14 +306,12 @@ def fill_unasked_slots(
             for s in missing:
                 value = str((result or {}).get(s.name, "")).strip()
                 if value:
-                    session.slots[s.name] = SlotValue(value=value, source="defaulted")
+                    session.slots[s.name] = SlotValue(value=value, source="llm_default")
 
     for s in missing:  # static fallback for anything still unfilled
         if session.slots.get(s.name) is None:
-            session.slots[s.name] = SlotValue(value=s.default_text, source="defaulted")
+            session.slots[s.name] = SlotValue(value=s.default_text, source="template_default")
 
-    if error is not None:
-        session.degraded = True
     session.finished = True
     return error
 
@@ -378,14 +392,14 @@ def extract_prefilled(
     session: SessionState, template: Template, *, provider: "llm.Provider | None"
 ) -> str | None:
     """One LLM call: fill slots the opening idea already answers. Mutates
-    ``session.slots`` (source ``extracted``). Returns an error string on failure
-    and sets ``session.degraded``; returns ``None`` on success."""
+    ``session.slots`` (source ``extracted``). Returns an error string on failure,
+    ``None`` on success. A failed extraction does not by itself degrade the
+    session — every slot it would have filled is still asked normally."""
     slot_lines = "\n".join(f"- {s.name}: {s.question_hint}" for s in template.slots)
     user = f'Idea: "{session.original_prompt}"\n\nSlots:\n{slot_lines}\n\nJSON:'
 
     result, error = capped_complete_json(session, _EXTRACTION_SYSTEM, user, provider=provider)
     if error is not None:
-        session.degraded = True
         return error
 
     valid = {s.name for s in template.slots}
@@ -418,7 +432,8 @@ def _question_user(slot: SlotDef, session: SessionState, template: Template) -> 
     established = [
         f"- {template.slot(n).label}: {v.value}"
         for n, v in session.slots.items()
-        if v.source in ("extracted", "asked", "defaulted") and v.value and template.slot(n)
+        if v.source in ("extracted", "asked", "llm_default", "template_default")
+        and v.value and template.slot(n)
     ]
     established_block = "\n".join(established) if established else "- nothing yet"
     return (
@@ -437,7 +452,9 @@ def next_question(
     """Generate the question + recommended default for the slot at
     ``current_index``. Returns ``(question, recommended, error)``. On any
     failure, returns the slot's static ``question_hint`` / ``default_text`` and a
-    non-null error, and sets ``session.degraded``."""
+    non-null error. The session is not marked degraded here: it only degrades if
+    the user then accepts that static recommendation (``accept_answer`` records
+    it as ``template_default``)."""
     slot = current_slot(session, template)
     if slot is None:
         return "", "", "no pending slot"
@@ -447,13 +464,11 @@ def next_question(
         provider=provider,
     )
     if error is not None:
-        session.degraded = True
         return slot.question_hint, slot.default_text, error
 
     question = str((result or {}).get("question", "")).strip()
     recommended = str((result or {}).get("recommended") or (result or {}).get("default", "")).strip()
     if not question or not recommended:
-        session.degraded = True
         return (
             slot.question_hint,
             slot.default_text,

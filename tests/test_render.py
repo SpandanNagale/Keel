@@ -19,7 +19,7 @@ def _session_all_defaulted(template_name: str, prompt: str = "build a widget") -
     template = engine.load_template(template_name)
     session = engine.start_session(prompt, template_name, created_date="2026-09-01")
     session.slots = {
-        s.name: SlotValue(value=s.default_text, source="defaulted")
+        s.name: SlotValue(value=s.default_text, source="template_default")
         for s in template.slots
     }
     session.finished = True
@@ -67,8 +67,8 @@ def test_skipped_slot_shows_placeholder_and_appears_in_open_questions():
 
 
 def test_degraded_session_carries_the_no_llm_note_in_open_questions():
-    session = _session_all_defaulted("default")
-    session.degraded = True
+    session = _session_all_defaulted("default")  # every slot is template_default
+    assert session.degraded is True  # derived, not a settable flag
     md = render_markdown(session)
     oq_block = md.split("## Open questions\n", 1)[1]
     assert "without LLM assistance" in oq_block

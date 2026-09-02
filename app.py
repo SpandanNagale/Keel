@@ -8,8 +8,10 @@ without Streamlit. Rules this file obeys:
   * State is mutated only inside button branches — never during render. Question
     generation happens at the tail of the branch that advances to a new slot, so
     the render pass only ever *reads* ``pending_q``.
-  * Every LLM failure is surfaced with ``st.warning`` and recorded on the
-    session's ``degraded`` flag, which the rendered spec notes.
+  * Every LLM failure is surfaced with ``st.warning``. Whether it *degrades* the
+    finished document is derived (``SessionState.degraded``): a slot left on
+    ``template_default``, or a failed synthesis / conflict call — not every
+    transient error.
 """
 from __future__ import annotations
 
@@ -91,10 +93,13 @@ def _inject_css() -> None:
 
 # source -> (human label, chip modifier). Used identically in the sidebar
 # progress panel and the review step so the colour always means the same thing.
+# llm_default and template_default are deliberately distinct: only the second is
+# a real fallback, and only it should read as a warning colour.
 _SOURCE_META = {
     "extracted": ("from your idea", "extracted"),
     "asked": ("you answered", "asked"),
-    "defaulted": ("Keel default", "defaulted"),
+    "llm_default": ("Keel suggested", "llm-default"),
+    "template_default": ("template fallback", "template-default"),
     "skipped": ("skipped", "skipped"),
     "pending": ("pending", "pending"),
 }
@@ -153,7 +158,6 @@ def _generate_pending_question(byok: str, byok_provider: str) -> None:
 
     provider, is_shared, blocking = _provider_for_call(byok, byok_provider)
     if blocking is not None:
-        session.degraded = True
         st.session_state.pending_q = {
             "slot": slot.name,
             "question": slot.question_hint,
@@ -190,7 +194,6 @@ def _start(
 
     provider, is_shared, blocking = _provider_for_call(byok, byok_provider)
     if blocking is not None:
-        session.degraded = True
         st.session_state.start_error = blocking
     else:
         if is_shared:
@@ -218,7 +221,7 @@ def _finalize(byok: str, byok_provider: str) -> None:
 
     provider, is_shared, blocking = _provider_for_call(byok, byok_provider)
     if blocking is not None:
-        session.degraded = True
+        session.synthesis_failed = True
         st.session_state.synth_error = blocking
         if needs_fill:
             engine.fill_unasked_slots(session, template, provider=None)  # static
@@ -247,10 +250,11 @@ def _finalize(byok: str, byok_provider: str) -> None:
         session, provider=provider, conflicts=conflicts, conflict_error=conflict_error
     )
     if error is not None:
-        session.degraded = True
+        session.synthesis_failed = True
         st.session_state.synth_error = error
         st.session_state.final_md = render_markdown(session)
     else:
+        session.synthesis_failed = False
         st.session_state.synth_error = None
         st.session_state.final_md = md
 
@@ -269,7 +273,13 @@ def _accept(text: str, byok: str, byok_provider: str) -> None:
     session = st.session_state.session
     if not pq or not session:
         return
-    engine.accept_answer(session, pq["slot"], text, recommended=pq["recommended"])
+    # If the question call had failed, pq["recommended"] is the slot's static
+    # default_text — accepting it unchanged is a genuine template fallback.
+    rec_source = "template_default" if pq.get("error") else "llm_default"
+    engine.accept_answer(
+        session, pq["slot"], text,
+        recommended=pq["recommended"], recommended_source=rec_source,
+    )
     st.session_state.pending_q = None
     _advance_after(byok, byok_provider)
 
@@ -311,6 +321,7 @@ def _load_session(raw: bytes) -> None:
         )
         return
     session.finished = True
+    session.synthesis_failed = False  # recomputed on the next synthesis
     st.session_state.session = session
     st.session_state.pending_q = None
     st.session_state.start_error = None
@@ -332,7 +343,9 @@ def _regenerate(edits: dict[str, str], byok: str, byok_provider: str) -> None:
     engine.apply_answer_edits(session, edits, template)
     session.regen_count += 1
     session.conflicts = []
+    session.resolved_conflicts = []
     session.conflict_check_error = None
+    session.synthesis_failed = False
     st.session_state.final_md = None
     st.session_state.synth_error = None
     _finalize(byok, byok_provider)
@@ -541,6 +554,21 @@ def _conflict_banner(session) -> None:
     )
 
 
+def _resolved_conflicts_panel(session) -> None:
+    """Conflicts the synthesis pass reconciled. Shown so the resolution is
+    visible, but kept out of Open questions — nothing is outstanding here."""
+    resolved = getattr(session, "resolved_conflicts", None)
+    if not resolved:
+        return
+    with st.expander(f"Resolved during synthesis ({len(resolved)})"):
+        for c in resolved:
+            slots = ", ".join(c.get("slots") or []) or "answers"
+            st.markdown(
+                f"- **{html.escape(slots)}** — {html.escape(str(c.get('conflict', '')).strip())}  \n"
+                f"  _{html.escape(str(c.get('resolution', '')).strip())}_"
+            )
+
+
 def _render_spec_sections(md: str) -> None:
     """Progressive reveal: one collapsible block per section instead of one wall."""
     lines = md.splitlines()
@@ -581,6 +609,7 @@ def _view_result(byok: str, byok_provider: str) -> None:
         )
 
     _conflict_banner(session)
+    _resolved_conflicts_panel(session)
 
     slug = engine.slugify(session.title())
     base = f"keel-{slug}-{session.created_date}"
@@ -621,7 +650,10 @@ def _review_and_regenerate(byok: str, byok_provider: str) -> None:
         "single question again."
     )
     st.markdown(
-        " &nbsp; ".join(_chip(s) for s in ("extracted", "asked", "defaulted", "skipped")),
+        " &nbsp; ".join(
+            _chip(s) for s in
+            ("extracted", "asked", "llm_default", "template_default", "skipped")
+        ),
         unsafe_allow_html=True,
     )
     for slot in slots:

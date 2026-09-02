@@ -94,13 +94,18 @@ def test_accept_answer_classifies_source_and_advances(make_session):
 
     engine.accept_answer(session, first, "  ", recommended="the default line")
     assert session.slots[first].value == "the default line"
-    assert session.slots[first].source == "defaulted"
+    assert session.slots[first].source == "llm_default"  # accepted an LLM recommendation
 
     second = session.pending_slots[1]
     engine.accept_answer(session, second, "something the user typed", recommended="rec")
     assert session.slots[second].source == "asked"
     assert session.current_index == 2
     assert session.questions_asked == 2
+
+    third = session.pending_slots[2]
+    engine.accept_answer(session, third, "", recommended="the static hint",
+                         recommended_source="template_default")
+    assert session.slots[third].source == "template_default"  # question call had failed
 
 
 def test_skip_slot_records_skip_and_advances(make_session):
@@ -121,8 +126,9 @@ def test_fill_remaining_defaults_backfills_every_slot_and_finishes(make_session)
     engine.fill_remaining_defaults(session, template)
     assert session.finished is True
     for s in template.slots:  # required AND optional
-        assert session.slots[s.name].source == "defaulted"
+        assert session.slots[s.name].source == "template_default"
         assert session.slots[s.name].value == s.default_text
+    assert session.degraded is True  # a template-only spec is a real fallback
 
 
 def test_fill_unasked_slots_uses_context_then_falls_back(make_session, stub_llm):
@@ -139,9 +145,10 @@ def test_fill_unasked_slots_uses_context_then_falls_back(make_session, stub_llm)
     assert session.finished is True
     # model-supplied value used where given...
     assert session.slots["data_model"].value == "one Contact record: name, email, phone"
-    assert session.slots["data_model"].source == "defaulted"
-    # ...static default_text where the model said nothing
+    assert session.slots["data_model"].source == "llm_default"
+    # ...static default_text (marked template_default) where the model said nothing
     assert session.slots["error_handling"].value == template.slot("error_handling").default_text
+    assert session.slots["error_handling"].source == "template_default"
     assert session.slots["interfaces"].value == template.slot("interfaces").default_text
 
 
@@ -180,14 +187,16 @@ def test_extract_prefilled_fills_slots_and_freeze_pending_skips_them(make_sessio
     assert len(session.pending_slots) == 7
 
 
-def test_extract_prefilled_surfaces_failure_and_sets_degraded(make_session, stub_llm):
+def test_extract_prefilled_surfaces_failure_without_degrading(make_session, stub_llm):
+    # A failed extraction is surfaced, but does not by itself degrade the session:
+    # every slot it would have filled is still asked from a blank page.
     stub_llm((None, "APIConnectionError: connection refused"))
     session = make_session()
     template = engine.load_template("default")
 
     error = engine.extract_prefilled(session, template, provider=_PROVIDER)
     assert error == "APIConnectionError: connection refused"
-    assert session.degraded is True
+    assert session.degraded is False
     assert session.slots == {}
 
 
@@ -231,6 +240,10 @@ def test_next_question_falls_back_to_static_text_on_failure(make_session, stub_l
     assert rec == slot.default_text
     assert rec != slot.default_strategy
     assert "AuthenticationError" in err
+    # next_question itself does not degrade — only accepting the static fallback does
+    assert session.degraded is False
+    engine.accept_answer(session, slot.name, rec, recommended=rec,
+                         recommended_source="template_default")
     assert session.degraded is True
 
 
@@ -244,7 +257,7 @@ def test_next_question_treats_missing_fields_as_a_parse_failure(make_session, st
     q, rec, err = engine.next_question(session, template, provider=_PROVIDER)
     assert q == slot.question_hint and rec == slot.default_text
     assert "missing question/recommended" in err
-    assert session.degraded is True
+    assert session.degraded is False  # not until the fallback is accepted
 
 
 def test_session_call_cap_refuses_the_eleventh_call(make_session, stub_llm):
@@ -260,7 +273,7 @@ def test_session_call_cap_refuses_the_eleventh_call(make_session, stub_llm):
     q, rec, err = engine.next_question(session, template, provider=_PROVIDER)
     assert "limit reached" in err
     assert session.call_count == engine.MAX_LLM_CALLS_PER_SESSION  # not incremented
-    assert session.degraded is True
+    assert session.degraded is False  # the fallback text has not been accepted
 
 
 # --------------------------------------------------------------------------- #
@@ -270,9 +283,9 @@ def test_apply_answer_edits_marks_changes_and_empties_as_skips(make_session):
     session = make_session()
     template = engine.load_template("default")
     session.slots = {
-        "scale": SlotValue(value="small", source="defaulted"),
+        "scale": SlotValue(value="small", source="llm_default"),
         "runtime": SlotValue(value="a local script", source="asked"),
-        "done": SlotValue(value="it runs", source="defaulted"),
+        "done": SlotValue(value="it runs", source="llm_default"),
     }
     changed = engine.apply_answer_edits(
         session,

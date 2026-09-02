@@ -127,7 +127,14 @@ which returns a `(result, error)` tuple — never a bare `None`, never a raised 
 `provider` is a `Provider(name, api_key, model, host)`; `llm.resolve_provider(secrets)`
 builds one. Groq and Ollama enforce JSON natively; Anthropic via an assistant-turn prefill
 — a prose reply becomes a distinguishable parse error. On failure the UI surfaces the
-reason, falls back to template text, and sets a `degraded` flag the output notes.
+reason and falls back to template text.
+
+Every answer carries a **source**: `extracted` (from your idea), `asked` (you typed it),
+`llm_default` (the model suggested it and you accepted), `template_default` (static YAML
+fallback, the model was unavailable), or `skipped`. `SessionState.degraded` is *derived*
+from that state — it is true only when a slot is on `template_default`, or the synthesis
+or conflict-check call actually failed. A transient earlier error that did not change the
+finished document (a missed extraction, one re-tried question) does not trip the banner.
 
 Call sites, all routed through `engine.capped_complete_json` (per-session cap of 14):
 
@@ -144,7 +151,15 @@ Call sites, all routed through `engine.capped_complete_json` (per-session cap of
    most specific answer, moves facts to the right section, enumerates the full interface
    surface, and expands each section to the length its content warrants. Section headings
    and their order are owned by `render.py`, never the model: the model returns section
-   *bodies* keyed by name.
+   *bodies* keyed by name. It also returns `resolved_conflicts` — which of the
+   contradictions it was handed its document silenced, and how.
+
+After synthesis, each pre-synthesis conflict is **re-validated against the document that
+was actually produced** (`render._revalidate_conflicts`). A conflict the model reported
+resolving — or a premise-drift conflict the finished document now plainly covers — moves
+to a *Resolved during synthesis* list (shown in the UI, never in *Open questions*). Only
+conflicts that survive re-validation reach *Open questions*. Anything the model claims to
+have resolved that was never raised, or resolved without reporting, is logged.
 
 The synthesized document is then run through deterministic Python checks (no extra LLM
 call): structure and ordering, empty sections, hardcoded-secret scrub (with a note added
@@ -152,7 +167,7 @@ to *Open questions*), a `default_strategy`-leak assertion, plus flags for fabric
 numeric thresholds, acceptance criteria that merely restate a constraint or non-goal, and
 a missing disclaimer in a health/legal/financial spec. Any structural failure falls back
 to the deterministic one-value-per-line renderer, with a visible warning and the degraded
-note. That renderer stays fully functional with no LLM available.
+note (`synthesis_failed` is set). That renderer stays fully functional with no LLM available.
 
 ### Caps (all constants)
 
@@ -179,9 +194,9 @@ the review step (a file from a newer Keel is refused with a clear message rather
 half-read).
 
 The review step lists every dimension that fed the spec, each editable, tagged with where
-it came from (`from your idea` / `you answered` / `Keel default` / `skipped`). **Regenerate
-spec** re-runs the conflict check and synthesis from the edited answers — no question is ever
-re-asked. Each regeneration costs two calls and is capped (`engine.MAX_REGENERATIONS`); the
+it came from (`from your idea` / `you answered` / `Keel suggested` / `template fallback` /
+`skipped`). **Regenerate spec** re-runs the conflict check and synthesis from the edited
+answers — no question is ever re-asked. Each regeneration costs two calls and is capped (`engine.MAX_REGENERATIONS`); the
 UI shows how many are left. `keel/session_io.py` owns the format; it imports and tests
 without Streamlit.
 

@@ -307,7 +307,8 @@ def test_sidebar_shows_live_slot_state(monkeypatch):
     _btn(at, "Accept & continue").click()
     at.run()
     side = "\n".join(m.value for m in at.sidebar.markdown)
-    assert "keel-chip--defaulted" in side
+    # accepting an LLM recommendation unchanged is llm_default, not a template fallback
+    assert "keel-chip--llm-default" in side
 
 
 def test_conflict_banner_appears_when_conflicts_are_present(monkeypatch):
