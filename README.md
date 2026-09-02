@@ -207,11 +207,22 @@ to a *Resolved during synthesis* list (shown in the UI, never in *Open questions
 conflicts that survive re-validation reach *Open questions*. Anything the model claims to
 have resolved that was never raised, or resolved without reporting, is logged.
 
+The conflict check reports two kinds. A **`logical`** conflict is a direct
+contradiction between answers, or the idea, that the developer has to resolve. A
+**`feasibility`** conflict is a combination that cannot work in practice even though no
+single answer is wrong — a single-process development server behind "hundreds of
+concurrent users", storage that cannot carry the stated concurrency — and usually means
+one answer needs revising, not that the developer contradicted themselves; it renders
+distinctly (`**Feasibility (…)**` with a *Likely fix*).
+
 The synthesized document is then run through deterministic Python checks (no extra LLM
 call): structure and ordering, empty sections, hardcoded-secret scrub (with a note added
-to *Open questions*), a `default_strategy`-leak assertion, plus flags for fabricated
-numeric thresholds, acceptance criteria that merely restate a constraint or non-goal, and
-a missing disclaimer in a health/legal/financial spec. Any structural failure falls back
+to *Open questions*), a `default_strategy`-leak assertion, acceptance criteria that
+merely restate a constraint or non-goal, and a missing disclaimer in a
+health/legal/financial spec. **Every numeric literal in the rendered document must trace
+to an answer** (verbatim or a plain arithmetic derivation of one); a capacity, throughput,
+or volume figure that does not is rewritten qualitatively and listed under *Open
+questions*. Any structural failure falls back
 to the deterministic one-value-per-line renderer, with a visible warning and the degraded
 note (`synthesis_failed` is set). That renderer stays fully functional with no LLM available.
 
@@ -326,11 +337,16 @@ judge model: slot coverage, mean questions asked, missed-ambiguity rate, redunda
 conflict recall, and false-precision rate (numbers in the spec that trace to no answer). The
 table stamps the model and persona mode that produced it.
 
-[`evals/fixtures/`](evals/fixtures/) holds two frozen sessions whose answers contradict each
-other — the hotel-website "no UI" case and the health-monitoring "offline but AI-generated"
-case. They are permanent regression cases: re-run them after any edit to the question,
-conflict, or synthesis prompt. `run_evals.py` exits non-zero if either stops being caught.
-Rebuild them with `python evals/fixtures/build_fixtures.py` only if the slot taxonomy changes.
+[`evals/fixtures/`](evals/fixtures/) holds frozen sessions used as permanent regression
+cases; `run_evals.py` exits non-zero if any of them regresses. Two are contradiction
+cases — the hotel-website "no UI" case and the health-monitoring "offline but
+AI-generated" case. One is a **feasibility** case (`feasibility-devserver-concurrency`):
+a development server plus company-wide concurrency must produce a `feasibility` conflict.
+One is a **numeric-honesty** case (`qualitative-only`): every answer is qualitative, so
+the rendered spec must contain no invented capacity or throughput figure. Re-run them
+after any edit to the question, conflict, or synthesis prompt. Rebuild the two
+contradiction fixtures with `python evals/fixtures/build_fixtures.py` only if the slot
+taxonomy changes.
 
 The committed `RESULTS.md` records which model and persona mode produced it. A small local
 model scores differently from a hosted one — iterate locally, but regenerate the committed

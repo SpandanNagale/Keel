@@ -160,7 +160,21 @@ _FIXTURE_EXPECT = {
         ["ai", "ai-generated", "ai generated", "interpretation", "language model",
          "inference"],
     ],
+    "feasibility-devserver-concurrency": [
+        ["development server", "dev server", "built-in server", "single process",
+         "single-process", "one process"],
+        ["concurren", "at the same time", "at once", "everyone", "hundreds", "many users",
+         "load", "simultaneous"],
+    ],
 }
+
+# Fixtures whose expected conflict must be reported with kind "feasibility".
+_FEASIBILITY_FIXTURES = {"feasibility-devserver-concurrency"}
+
+# Fixtures whose regression check is "the rendered spec invents no capacity /
+# throughput / volume figure", not a contradiction. Their answers are entirely
+# qualitative, so any bare quantity in the body that traces to no answer fails.
+_NO_FIGURE_FIXTURES = {"qualitative-only"}
 
 
 def run_fixture(path: pathlib.Path, provider) -> dict:
@@ -177,10 +191,36 @@ def run_fixture(path: pathlib.Path, provider) -> dict:
     blob = " ".join(
         f"{c.get('conflict', '')} {' '.join(c.get('slots') or [])}" for c in conflicts
     ).lower()
+
+    # Numeric-honesty fixture: any bare quantity in the body that traces to no
+    # answer is a regression.
+    if path.stem in _NO_FIGURE_FIXTURES:
+        known = _numbers(
+            session.original_prompt
+            + " " + " ".join(v.value for v in session.slots.values())
+        )
+        strays = sorted(
+            n for n in _numbers(_spec_body(md or ""))
+            if n not in known and not render._YEARISH.match(n)
+        )
+        return {
+            "id": path.stem,
+            "n_conflicts": len(conflicts),
+            "survived": len(session.conflicts),
+            "resolved": len(session.resolved_conflicts),
+            "caught": not strays,
+            "synth": "fell-back" if serr else "ok",
+            "result": "PASS" if (not strays and cerr is None) else "FAIL",
+            "detail": (f"invented figures: {', '.join(strays)}" if strays else "")
+            or cerr or serr or "",
+        }
+
     groups = _FIXTURE_EXPECT.get(path.stem, [])
     caught = bool(conflicts) and all(
         any(term in blob for term in group) for group in groups
     )
+    if path.stem in _FEASIBILITY_FIXTURES:
+        caught = caught and any(c.get("kind") == "feasibility" for c in conflicts)
     return {
         "id": path.stem,
         "n_conflicts": len(conflicts),

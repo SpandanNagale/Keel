@@ -224,23 +224,31 @@ report genuine contradictions and unaddressed premises. You do NOT resolve them 
 write any part of the specification.
 
 Return ONLY a JSON object with one key:
-  {"conflicts": [ {"slots": [...], "conflict": "...", "suggested_resolution": "..."} ]}
+  {"conflicts": [ {"slots": [...], "kind": "logical" | "feasibility", "conflict": "...", \
+"suggested_resolution": "..."} ]}
 
 For each entry:
 - "slots": the names (in brackets above) of the answers that clash. Use the literal string \
   "original idea" when the clash is between the idea and the answers (premise drift, below).
+- "kind": "logical" when the answers directly contradict each other or the idea; "feasibility" \
+  when no single answer is self-contradictory but the COMBINATION cannot work in practice.
 - "conflict": one sentence naming what cannot all be true at once.
-- "suggested_resolution": one sentence naming the choice the developer has to make. Do not \
-  pick for them.
+- "suggested_resolution": one sentence naming the choice the developer has to make. For a \
+  feasibility conflict, name the single answer most likely to need revising. Do not pick for them.
 
-Look for exactly two things:
-1. Direct contradictions between answers. For example: one answer says "offline, standard \
-   library only" while another needs a hosted model or a paid API; one answer lists \
-   authentication as a non-goal while another stores per-user data; a stated runtime that \
-   cannot deliver a stated capability.
-2. Premise drift: a capability named or plainly implied by the ORIGINAL IDEA that NONE of the \
-   answers account for — a chat or conversational interface, a user-facing UI, scheduling or \
-   recurring runs, multiple users, stored history. Report it with "original idea" in "slots".
+Look for three things:
+1. Direct contradictions between answers ("kind": "logical"). For example: one answer says \
+   "offline, standard library only" while another needs a hosted model or a paid API; one \
+   answer lists authentication as a non-goal while another stores per-user data.
+2. Premise drift ("kind": "logical"): a capability named or plainly implied by the ORIGINAL \
+   IDEA that NONE of the answers account for — a chat or conversational interface, a \
+   user-facing UI, scheduling or recurring runs, multiple users, stored history. Report it \
+   with "original idea" in "slots".
+3. Technical feasibility of the combination ("kind": "feasibility"): can the stated runtime \
+   carry the stated scale (a single-process development server cannot serve hundreds of \
+   concurrent users); do the dependency limits permit the stated capabilities; does the \
+   storage choice support the stated concurrency; do the interfaces require infrastructure \
+   the constraints forbid. Each answer alone is reasonable; together they do not hold up.
 
 Rules:
 - Only report a conflict you can state concretely from the given text. Do not pad the list, do \
@@ -286,9 +294,11 @@ def check_conflicts(
                 if isinstance(slots_raw, list)
                 else []
             )
+            kind = str(item.get("kind", "")).strip().lower()
             conflicts.append(
                 {
                     "slots": slots,
+                    "kind": kind if kind in ("logical", "feasibility") else "logical",
                     "conflict": text,
                     "suggested_resolution": str(item.get("suggested_resolution", "")).strip(),
                 }
@@ -377,11 +387,18 @@ def _assemble_and_validate(
     session.conflicts = surviving
     session.resolved_conflicts = resolved
 
+    # B4: every capacity / throughput / volume figure in the document must trace
+    # to an answer. Unsupported ones are rewritten qualitatively here, and each
+    # rewrite becomes an "Open questions" note.
+    bodies, figure_notes = _scrub_unsupported_figures(bodies, _slot_number_blob(session))
+
     # "Open questions" is rebuilt here, in Python: the surviving conflict list,
     # plus deterministic checks the model does not run (fabricated numbers,
     # criteria that restate constraints, missing sensitive-domain disclaimer).
     # The model never decides whether a conflict is reported.
-    bodies["open_questions"] = _build_open_questions(session, template, bodies)
+    bodies["open_questions"] = _build_open_questions(
+        session, template, bodies, extra_notes=figure_notes
+    )
 
     # Hardcoded-secret scan + scrub.
     scrubbed = False
@@ -476,10 +493,17 @@ def _conflict_bullets(conflicts: list[dict] | None) -> list[str]:
     out: list[str] = []
     for c in conflicts or []:
         slots = ", ".join(c.get("slots") or []) or "answers"
-        line = f"- **Conflict ({slots}):** {str(c.get('conflict', '')).strip()}"
         res = str(c.get("suggested_resolution") or "").strip()
-        if res:
-            line += f" _Suggested resolution:_ {res}"
+        if c.get("kind") == "feasibility":
+            # Not a self-contradiction the developer made — the combination just
+            # does not hold up, and usually one answer needs revising.
+            line = f"- **Feasibility ({slots}):** {str(c.get('conflict', '')).strip()}"
+            if res:
+                line += f" _Likely fix:_ {res}"
+        else:
+            line = f"- **Conflict ({slots}):** {str(c.get('conflict', '')).strip()}"
+            if res:
+                line += f" _Suggested resolution:_ {res}"
         out.append(line)
     return out
 
@@ -516,6 +540,128 @@ def _numbers_in(text: str) -> set[str]:
 def _slot_number_blob(session: SessionState) -> set[str]:
     parts = [session.original_prompt] + [v.value for v in session.slots.values() if v.value]
     return _numbers_in(" ".join(parts))
+
+
+# --------------------------------------------------------------------------- #
+# B4: every number in the rendered document must trace to an answer
+# --------------------------------------------------------------------------- #
+_FIGURE_RE = re.compile(r"\d[\d,]*(?:\.\d+)?%?")
+_YEARISH = re.compile(r"^(?:19|20)\d{2}$")
+_COMPARATOR_BEFORE = re.compile(
+    r"(?:[<>]=?|≥|≤|up to|at least|at most|no more than|under|over|within|below|above|"
+    r"roughly|around|about|approximately|~)\s*$",
+    re.I,
+)
+_QUANTITY_AFTER = re.compile(
+    r"^\s*(?:%|per cent|percent|users?|people|concurren\w*|sessions?|customers?|visitors?|"
+    r"requests?|rps|qps|per second|per minute|per hour|per day|/s|queries|hits?|"
+    r"transactions?|rows?|records?|items?|entries|bookings?|orders?|rooms?|hotels?|"
+    r"documents?|files?|messages?|connections?|threads?|workers?|[kmgt]b\b|bytes?|"
+    r"megabytes?|gigabytes?)",
+    re.I,
+)
+
+
+def _num_val(bare: str) -> float | None:
+    try:
+        return float(bare)
+    except ValueError:
+        return None
+
+
+def _figure_is_supported(bare: str, known: set[str]) -> bool:
+    """Whether a numeric literal traces to an answer — verbatim, or as a plain
+    arithmetic derivation of one (a rate from a daily total, a total from a
+    per-item count). Errs toward "supported": a false accept is better than
+    rewriting a legitimate figure."""
+    if bare in known:
+        return True
+    val = _num_val(bare)
+    if val is None:
+        return False
+    for k in known:
+        kv = _num_val(k)
+        if not kv:
+            continue
+        for n in (2, 3, 4, 5, 6, 7, 10, 12, 24, 30, 52, 60, 100, 365, 1000, 3600, 86400):
+            if abs(val - kv * n) < 1e-6 or abs(val - kv / n) < 1e-6:
+                return True
+    return False
+
+
+def _qualitative_for(after: str, pct: bool) -> str:
+    a = after.lower()
+    if pct:
+        return "a defined threshold"
+    if re.search(r"\b(users?|people|concurren\w*|sessions?|customers?|visitors?)\b", a):
+        return "a small number of users"
+    if re.search(r"\b(requests?|rps|qps|per second|per minute|per hour|/s|queries|hits?|"
+                r"transactions?)\b", a):
+        return "a low, unspecified rate"
+    if re.search(r"\b([kmgt]b|bytes?|megabytes?|gigabytes?)\b", a):
+        return "a modest size"
+    if re.search(r"\b(rows?|records?|items?|entries|bookings?|orders?|rooms?|hotels?|"
+                r"documents?|files?|messages?)\b", a):
+        return "an unspecified number"
+    return "an unspecified amount"
+
+
+def _scrub_unsupported_figures(
+    bodies: dict[str, str], known: set[str]
+) -> tuple[dict[str, str], list[str]]:
+    """Replace every capacity / throughput / volume figure in the rendered
+    sections that traces to no answer with qualitative wording, and return one
+    note per distinct replacement. A plausible invented number is worse than
+    vagueness — an agent treats it as a requirement (spec B4)."""
+    notes: dict[str, str] = {}
+
+    def scrub(section_key: str, body: str) -> str:
+        def repl(m: re.Match) -> str:
+            token = m.group(0)
+            s, i, j = m.string, m.start(), m.end()
+            bare = re.sub(r"[,\s%]", "", token)
+            if not bare:
+                return token
+            # part of an identifier / version / hyphenated code (HS256, v2, P95, SHA-256)
+            if i > 0 and (s[i - 1].isalpha() or s[i - 1] == "-"):
+                return token
+            tail = s[j] if j < len(s) else ""
+            if tail.isalpha() or tail == "-":
+                return token
+            # ordered-list marker "1." / "2." at the start of a line
+            line_start = s.rfind("\n", 0, i) + 1
+            if s[line_start:i].strip() == "" and tail == ".":
+                return token
+            if _YEARISH.match(bare) or _figure_is_supported(bare, known):
+                return token
+            pct = "%" in token
+            after = s[j:j + 28]
+            before = s[max(0, i - 18):i]
+            challenged = (
+                pct
+                or bool(_COMPARATOR_BEFORE.search(before))
+                or bool(_QUANTITY_AFTER.match(after))
+                or (_num_val(bare) is not None and _num_val(bare) >= 1000)
+            )
+            if not challenged:
+                return token
+            notes.setdefault(token.strip(), section_key)
+            return _qualitative_for(after, pct)
+
+        return _FIGURE_RE.sub(repl, body)
+
+    for key in list(bodies):
+        if key == "open_questions":
+            continue
+        bodies[key] = scrub(key, bodies[key])
+
+    note_lines = [
+        f'- **Unverified figure:** "{orig}" appeared in the '
+        f'{sect.replace("_", " ")} section but no answer specified it; it has been '
+        "replaced with qualitative wording. Decide the real value before starting."
+        for orig, sect in notes.items()
+    ]
+    return bodies, note_lines
 
 
 def _unverified_figure_bullets(acceptance_body: str, known: set[str]) -> list[str]:
@@ -761,7 +907,11 @@ def _reference_bullet(session: SessionState) -> list[str]:
 
 
 def _build_open_questions(
-    session: SessionState, template: Template, bodies: dict[str, str]
+    session: SessionState,
+    template: Template,
+    bodies: dict[str, str],
+    *,
+    extra_notes: list[str] | None = None,
 ) -> str:
     """Rebuild the "Open questions" body deterministically from the model's draft
     plus everything Python is responsible for. The sole-"None" sentinel survives
@@ -770,6 +920,7 @@ def _build_open_questions(
     additions += _conflict_bullets(session.conflicts)
     additions += _conflict_unavailable_bullet(session.conflict_check_error)
     additions += _reference_bullet(session)
+    additions += list(extra_notes or [])
     additions += _unverified_figure_bullets(
         bodies.get("acceptance_criteria", ""), _slot_number_blob(session)
     )

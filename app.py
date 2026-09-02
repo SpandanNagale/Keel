@@ -1070,12 +1070,20 @@ def _conflict_banner(session) -> None:
         slots = ", ".join(html.escape(s) for s in (c.get("slots") or [])) or "answers"
         conflict = html.escape(str(c.get("conflict", "")).strip())
         res = html.escape(str(c.get("suggested_resolution") or "").strip())
-        res_html = f'<br><span class="keel-res">Suggested resolution: {res}</span>' if res else ""
-        items.append(f"<li><strong>{slots}</strong> — {conflict}{res_html}</li>")
+        feasibility = c.get("kind") == "feasibility"
+        res_label = "Likely fix" if feasibility else "Suggested resolution"
+        res_html = f'<br><span class="keel-res">{res_label}: {res}</span>' if res else ""
+        tag = '<em>(feasibility)</em> ' if feasibility else ""
+        items.append(f"<li>{tag}<strong>{slots}</strong> — {conflict}{res_html}</li>")
     n = len(session.conflicts)
+    any_feas = any(c.get("kind") == "feasibility" for c in session.conflicts)
+    heading = (
+        f"{n} unresolved {'issue' if n == 1 else 'issues'} in your answers"
+        if any_feas
+        else f"{n} unresolved {'conflict' if n == 1 else 'conflicts'} in your answers"
+    )
     st.markdown(
-        f'<div class="keel-conflict"><h4>{n} unresolved '
-        f'{"conflict" if n == 1 else "conflicts"} in your answers</h4>'
+        f'<div class="keel-conflict"><h4>{heading}</h4>'
         f'<ul>{"".join(items)}</ul>'
         '<a href="#review-edit-answers">Jump to the answers to resolve them &darr;</a></div>',
         unsafe_allow_html=True,

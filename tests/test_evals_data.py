@@ -48,12 +48,17 @@ def test_declared_template_is_real_if_present(case):
         assert case["template"] in engine.list_templates()
 
 
+FIXTURE_STEMS = {
+    "hotel-website-contradiction",
+    "health-monitoring-offline-ai",
+    "feasibility-devserver-concurrency",
+    "qualitative-only",
+}
+
+
 def test_frozen_fixtures_load_and_match_the_schema():
     files = sorted((_EVALS / "fixtures").glob("*.json"))
-    assert {f.stem for f in files} == {
-        "hotel-website-contradiction",
-        "health-monitoring-offline-ai",
-    }
+    assert {f.stem for f in files} == FIXTURE_STEMS
     for f in files:
         session, err = session_io.loads(f.read_text("utf-8"))
         assert err is None, f"{f.name}: {err}"
@@ -76,12 +81,12 @@ def test_eval_harness_is_wired_and_runnable():
 
     mod = importlib.import_module("evals.run_evals")
     for attr in ("run_case", "run_fixture", "write_results", "_spec_body", "_numbers",
-                 "_FIXTURE_EXPECT"):
+                 "_FIXTURE_EXPECT", "_FEASIBILITY_FIXTURES", "_NO_FIGURE_FIXTURES"):
         assert hasattr(mod, attr), f"run_evals is missing {attr}"
-    assert set(mod._FIXTURE_EXPECT) == {
-        "hotel-website-contradiction",
-        "health-monitoring-offline-ai",
-    }
+    # every fixture on disk is a known regression case (a contradiction fixture
+    # in _FIXTURE_EXPECT, or a numeric-honesty fixture in _NO_FIGURE_FIXTURES)
+    assert set(mod._FIXTURE_EXPECT) | mod._NO_FIGURE_FIXTURES == FIXTURE_STEMS
+    assert mod._FEASIBILITY_FIXTURES <= set(mod._FIXTURE_EXPECT)
     # deterministic helpers work with no model
     assert mod._numbers("handles 2000 rows at 12 MB") == {"2000", "12"}
     assert "## Objective" not in mod._spec_body(

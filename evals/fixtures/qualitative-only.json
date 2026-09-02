@@ -1,0 +1,98 @@
+{
+  "schema_version": 3,
+  "keel_session": {
+    "original_prompt": "a tool to tidy up my downloads folder",
+    "template_name": "cli",
+    "created_date": "2026-09-01",
+    "mode": "technical",
+    "depth": "thorough",
+    "pending_slots": [
+      "io_contract",
+      "runtime",
+      "scale",
+      "constraints",
+      "non_goals",
+      "done",
+      "data_model",
+      "interfaces"
+    ],
+    "slots": {
+      "io_contract": {
+        "value": "Takes a folder path; moves files into subfolders by type and prints a summary of what moved.",
+        "source": "asked",
+        "rationale": "",
+        "revisit_if": ""
+      },
+      "runtime": {
+        "value": "Run by hand from a terminal when the folder gets messy.",
+        "source": "asked",
+        "rationale": "",
+        "revisit_if": ""
+      },
+      "scale": {
+        "value": "However many files happen to be in a downloads folder — usually not many, occasionally a lot.",
+        "source": "asked",
+        "rationale": "",
+        "revisit_if": ""
+      },
+      "constraints": {
+        "value": "A single-file Python script, standard library only, works offline.",
+        "source": "asked",
+        "rationale": "",
+        "revisit_if": ""
+      },
+      "non_goals": {
+        "value": "No GUI, no config file, no undo history, no scheduling.",
+        "source": "asked",
+        "rationale": "",
+        "revisit_if": ""
+      },
+      "done": {
+        "value": "Running it on a messy folder leaves it sorted into type subfolders and prints what it did.",
+        "source": "asked",
+        "rationale": "",
+        "revisit_if": ""
+      },
+      "data_model": {
+        "value": "One entry per file: original path, detected type, destination path.",
+        "source": "asked",
+        "rationale": "",
+        "revisit_if": ""
+      },
+      "interfaces": {
+        "value": "tidy <folder> [--dry-run] — sort the folder, or just print the plan.",
+        "source": "asked",
+        "rationale": "",
+        "revisit_if": ""
+      },
+      "error_handling": {
+        "value": "An unreadable file is skipped and listed; a missing folder exits non-zero with a message.",
+        "source": "asked",
+        "rationale": "",
+        "revisit_if": ""
+      },
+      "auth_model": {
+        "value": "No sign-in and no user accounts — everyone using it sees the same data.",
+        "source": "template_default",
+        "rationale": "",
+        "revisit_if": ""
+      },
+      "seed_data": {
+        "value": "Ships empty; the first user creates all the data.",
+        "source": "template_default",
+        "rationale": "",
+        "revisit_if": ""
+      }
+    },
+    "current_index": 0,
+    "questions_asked": 0,
+    "call_count": 0,
+    "synthesis_failed": false,
+    "finished": true,
+    "regen_count": 0,
+    "conflicts": [],
+    "conflict_check_error": null,
+    "resolved_conflicts": [],
+    "reference": null
+  }
+}

@@ -1,0 +1,98 @@
+{
+  "schema_version": 3,
+  "keel_session": {
+    "original_prompt": "an internal dashboard for the whole company",
+    "template_name": "web-app",
+    "created_date": "2026-09-01",
+    "mode": "technical",
+    "depth": "thorough",
+    "pending_slots": [
+      "io_contract",
+      "runtime",
+      "scale",
+      "constraints",
+      "non_goals",
+      "done",
+      "data_model",
+      "interfaces"
+    ],
+    "slots": {
+      "io_contract": {
+        "value": "Staff open pages to view and filter reports; a form submits a new note.",
+        "source": "asked",
+        "rationale": "",
+        "revisit_if": ""
+      },
+      "runtime": {
+        "value": "Runs on the web framework's built-in development server as a single process on one laptop-class VM.",
+        "source": "asked",
+        "rationale": "",
+        "revisit_if": ""
+      },
+      "scale": {
+        "value": "Everyone in the company uses it during the working day, often at the same moment after the daily email.",
+        "source": "asked",
+        "rationale": "",
+        "revisit_if": ""
+      },
+      "constraints": {
+        "value": "Server-rendered Python. A single SQLite file. No build step, no extra services.",
+        "source": "asked",
+        "rationale": "",
+        "revisit_if": ""
+      },
+      "non_goals": {
+        "value": "No mobile app, no public access, no exports to spreadsheets.",
+        "source": "asked",
+        "rationale": "",
+        "revisit_if": ""
+      },
+      "done": {
+        "value": "A staff member can open the dashboard, filter a report, and add a note, and everyone sees it.",
+        "source": "asked",
+        "rationale": "",
+        "revisit_if": ""
+      },
+      "data_model": {
+        "value": "Report(id, title, body); Note(id, report_id, author, body, created_at).",
+        "source": "asked",
+        "rationale": "",
+        "revisit_if": ""
+      },
+      "interfaces": {
+        "value": "GET / (report list), GET /report/<id>, POST /report/<id>/note.",
+        "source": "asked",
+        "rationale": "",
+        "revisit_if": ""
+      },
+      "error_handling": {
+        "value": "A bad filter shows an empty state; a missing report shows a 404 page.",
+        "source": "asked",
+        "rationale": "",
+        "revisit_if": ""
+      },
+      "auth_model": {
+        "value": "No sign-in and no user accounts — everyone using it sees the same data.",
+        "source": "template_default",
+        "rationale": "",
+        "revisit_if": ""
+      },
+      "seed_data": {
+        "value": "Ships empty; the first user creates all the data.",
+        "source": "template_default",
+        "rationale": "",
+        "revisit_if": ""
+      }
+    },
+    "current_index": 0,
+    "questions_asked": 0,
+    "call_count": 0,
+    "synthesis_failed": false,
+    "finished": true,
+    "regen_count": 0,
+    "conflicts": [],
+    "conflict_check_error": null,
+    "resolved_conflicts": [],
+    "reference": null
+  }
+}
