@@ -20,8 +20,9 @@ from datetime import date
 from pathlib import Path
 
 import streamlit as st
+import streamlit.components.v1 as components
 
-from keel import engine, llm, reference, render, session_io
+from keel import engine, llm, mockup, reference, render, session_io
 from keel.models import ReferenceState
 from keel.render import render_markdown
 
@@ -131,6 +132,8 @@ def _init_state() -> None:
         st.session_state.start_error = None      # extraction / upload / reference error banner
         st.session_state.final_md = None         # synthesized (or fallback) document
         st.session_state.synth_error = None      # synthesis failure reason, if any
+        st.session_state.mockup_html = None      # sanitized wireframe HTML, once generated
+        st.session_state.mockup_error = None     # wireframe generation failure reason
 
 
 def _provider_for_call(byok: str, byok_provider: str) -> tuple["llm.Provider | None", bool, str | None]:
@@ -551,6 +554,8 @@ def _load_session(raw: bytes) -> None:
     st.session_state.start_error = None
     st.session_state.final_md = None
     st.session_state.synth_error = None
+    st.session_state.mockup_html = None
+    st.session_state.mockup_error = None
 
 
 def _regenerate(edits: dict[str, str], byok: str, byok_provider: str) -> None:
@@ -572,7 +577,27 @@ def _regenerate(edits: dict[str, str], byok: str, byok_provider: str) -> None:
     session.synthesis_failed = False
     st.session_state.final_md = None
     st.session_state.synth_error = None
+    st.session_state.mockup_html = None       # the old wireframe no longer matches
+    st.session_state.mockup_error = None
     _finalize(byok, byok_provider)
+
+
+def _generate_mockup(byok: str, byok_provider: str) -> None:
+    """Opt-in: one extra LLM call turning the interfaces/data-model answers into a
+    sanitized static wireframe. Never automatic — many users only want the spec."""
+    session = st.session_state.session
+    if not session:
+        return
+    provider, is_shared, blocking = _provider_for_call(byok, byok_provider)
+    if blocking is not None:
+        st.session_state.mockup_error = blocking
+        st.session_state.mockup_html = None
+        return
+    if is_shared:
+        _record_shared_call()
+    html_doc, error = mockup.build_mockup(session, provider=provider)
+    st.session_state.mockup_html = html_doc
+    st.session_state.mockup_error = error
 
 
 def _clear_edit_widgets() -> None:
@@ -592,6 +617,8 @@ def _reset() -> None:
     st.session_state.start_error = None
     st.session_state.final_md = None
     st.session_state.synth_error = None
+    st.session_state.mockup_html = None
+    st.session_state.mockup_error = None
     _clear_edit_widgets()
     _clear_candidate_widgets()
 
@@ -973,11 +1000,43 @@ def _view_result(byok: str, byok_provider: str) -> None:
     st.caption("Copy the whole spec from the box below — the copy icon is top-right.")
     st.code(md, language="markdown")
 
+    _wireframe_preview(byok, byok_provider, base)
+
     _review_and_regenerate(byok, byok_provider)
 
     if st.button("Start over", key="startover_r"):
         _reset()
         st.rerun()
+
+
+def _wireframe_preview(byok: str, byok_provider: str, base: str) -> None:
+    """Opt-in static wireframe of the screens in the spec. One extra LLM call;
+    the model's HTML is sanitized before it is framed or offered for download."""
+    session = st.session_state.session
+    st.subheader("Wireframe preview")
+    st.caption(
+        "A greyscale, static sketch of the screens the spec implies — structure to "
+        "check, not a design. One extra LLM call. Nothing is executed; the HTML is "
+        "sanitized (scripts, handlers, embeds, and external URLs stripped) before it "
+        "is shown or downloaded."
+    )
+    budget_left = session.call_count + 1 <= engine.MAX_LLM_CALLS_PER_SESSION
+    label = "Regenerate wireframe" if st.session_state.mockup_html else "Generate wireframe preview"
+    if st.button(label, key="mockup_btn", disabled=not budget_left):
+        _generate_mockup(byok, byok_provider)
+        st.rerun()
+    if not budget_left and not st.session_state.mockup_html:
+        st.caption("Not enough of this session's LLM-call budget left for the wireframe.")
+
+    if st.session_state.mockup_error:
+        st.warning(f"Wireframe unavailable: {st.session_state.mockup_error}")
+    if st.session_state.mockup_html:
+        components.html(st.session_state.mockup_html, height=600, scrolling=True)
+        st.download_button(
+            "Download wireframe (.html)", st.session_state.mockup_html,
+            file_name=f"{base}-mockup.html", mime="text/html",
+            help="A standalone, sanitized HTML wireframe — not part of the spec.",
+        )
 
 
 def _review_and_regenerate(byok: str, byok_provider: str) -> None:

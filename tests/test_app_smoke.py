@@ -494,6 +494,35 @@ def test_reference_can_be_skipped_from_the_confirm_view(monkeypatch):
     assert not at.exception
 
 
+def test_wireframe_preview_is_opt_in_and_sanitized(monkeypatch):
+    def llm(system, user, **kw):
+        if "STATIC HTML WIREFRAME" in system:
+            return {"html": "<section class='screen'><h3>GET /</h3>"
+                            "<script>alert('x')</script>"
+                            "<form action='http://evil/x'><input placeholder='q'></form>"
+                            "</section>"}, None
+        return _happy_llm(system, user, **kw)
+
+    at = _new_app(monkeypatch, llm)
+    _start(at)
+    while not at.session_state.session.finished:
+        _btn(at, "Accept & continue").click()
+        at.run()
+
+    # not generated until asked
+    assert at.session_state.mockup_html is None
+    calls_before = at.session_state.session.call_count
+    _btn(at, "Generate wireframe preview").click()
+    at.run()
+
+    doc = at.session_state.mockup_html
+    assert doc and doc.startswith("<!DOCTYPE html>")
+    assert "<script" not in doc and "alert(" not in doc and "evil" not in doc
+    assert "GET /" in doc and "Wireframe preview" in doc
+    assert at.session_state.session.call_count == calls_before + 1
+    assert not at.exception
+
+
 def test_fresh_run_starts_clean_no_persistence(monkeypatch):
     at1 = _new_app(monkeypatch, _happy_llm)
     _start(at1)

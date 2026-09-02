@@ -111,6 +111,7 @@ keel/llm.py               the one place an LLM is called; returns (result, error
 keel/session_io.py        session <-> JSON, schema-version gate + migrations (v1 -> v2)
 keel/firecrawl.py         stdlib HTTP client for the Firecrawl scrape / map API
 keel/reference.py         reference intake: scraped markdown -> evidence -> slot candidates
+keel/mockup.py            optional static wireframe: LLM HTML -> allowlist sanitizer
 keel/templates/*.yaml     five slot templates
 .streamlit/config.toml    dark theme palette
 assets/style.css          the CSS the theme block can't reach (chips, conflict banner)
@@ -118,8 +119,9 @@ doctor.py                 one-live-call smoke script
 tests/
 ```
 
-`keel/engine.py`, `keel/render.py`, `keel/session_io.py`, `keel/firecrawl.py`, and
-`keel/reference.py` import and pass their tests without Streamlit installed.
+`keel/engine.py`, `keel/render.py`, `keel/session_io.py`, `keel/firecrawl.py`,
+`keel/reference.py`, and `keel/mockup.py` import and pass their tests without Streamlit
+installed.
 
 The result screen renders the spec section by section (each collapsible), shows a conflict
 banner above it when `check_conflicts` found anything, and colour-codes every answer by
@@ -185,6 +187,7 @@ note (`synthesis_failed` is set). That renderer stays fully functional with no L
 | Regenerations per session | 3 | `keel/engine.py` |
 | Output tokens — question | 800 | `keel/llm.py` |
 | Output tokens — synthesis | 3500 | `keel/render.py` |
+| Output tokens — wireframe | 4000 | `keel/mockup.py` |
 | Shared-key calls per day | 500 | `app.py` |
 | Opening prompt length | 500 chars | `keel/engine.py` |
 
@@ -228,6 +231,20 @@ before anything is fetched. Every reference mode is optional; the blank-prompt f
 default and works with Firecrawl unavailable. `keel/firecrawl.py` (the HTTP client, stdlib
 only) and `keel/reference.py` (evidence → candidates → slots) import and test without
 Streamlit.
+
+## Wireframe preview
+
+The result screen has an opt-in **Generate wireframe preview** button. It makes one extra
+LLM call that turns the `interfaces` and `data_model` answers into a greyscale, static HTML
+sketch — one block per screen with its route and fields — so you can eyeball the structure.
+It is not part of the spec and is offered as a separate `.html` download.
+
+Keel does not execute generated code, ever. The model's HTML is untrusted: `keel/mockup.py`
+rebuilds it from a tag/attribute **allowlist**, dropping `<script>`, `on*` handlers,
+`<iframe>`/`<object>`/`<embed>`, `<form action>`, `<style>`, `<img>`, and any
+`javascript:` / `data:` / external URL. The sanitized result is framed with
+`st.components.v1.html` and wrapped in a fixed greyscale stylesheet. An injected `<script>`
+in the model's response is stripped — there is a test that proves it.
 
 ## Save, edit, regenerate
 
